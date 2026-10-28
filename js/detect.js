@@ -628,6 +628,8 @@ function DetectModule(Geo, Imaging) {
       const cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
       const cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
       const sides = [0, 1, 2, 3].map((i) => side(q[i], q[(i + 1) % 4], cx, cy));
+      // 3 辺以上が画面のふちなら、書類のふちは 1 本しか見えていないので、書類とはみなさない
+      if (sides.filter((x) => x.border).length >= 3) return 0;
       const sups = sides.map((s) => s.sup);
       const mean = sups.reduce((a, b) => a + b, 0) / 4;
       const min = Math.min(...sups);
@@ -756,6 +758,7 @@ function DetectModule(Geo, Imaging) {
       if (dev > 55) return null;
       const cx = (p0[0] + p1[0] + p2[0] + p3[0]) / 4, cy = (p0[1] + p1[1] + p2[1] + p3[1]) / 4;
       sides[0] = a1; sides[1] = b2; sides[2] = a2; sides[3] = b1;
+      if ((a1.border ? 1 : 0) + (a2.border ? 1 : 0) + (b1.border ? 1 : 0) + (b2.border ? 1 : 0) >= 3) return null;
       let sum = 0, min = Infinity, con = 0, conN = 0;
       for (let i = 0; i < 4; i++) {
         const l = sides[i], A = pts[i], B = pts[(i + 1) % 4];
