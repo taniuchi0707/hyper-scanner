@@ -125,7 +125,7 @@ try {
       const ok = inside.filter((row) => row.v2 < 0.008), bad = inside.filter((row) => !(row.v2 < 0.008));
       const frac = (list, f) => list.length ? (list.filter(f).length / list.length * 100).toFixed(0) + '%' : '-';
       const q = (list) => { const s = list.map((row) => row.score).sort((a, b) => a - b); return s.length ? [0.1, 0.25, 0.5].map((p) => s[Math.floor(p * (s.length - 1))].toFixed(2)).join('/') : '-'; };
-      console.log(`  点数: 正解 ${ok.length} 件のうち 0.6 以上 ${frac(ok, (row) => row.score >= 0.6)}、0.35 以上 ${frac(ok, (row) => row.score >= 0.35)}（10/25/50% 点 ${q(ok)}） / 外れ ${bad.length} 件のうち 0.6 以上 ${frac(bad, (row) => row.score >= 0.6)}`);
+      console.log(`  点数: 正解 ${ok.length} 件のうち 0.6 以上 ${frac(ok, (row) => row.score >= 0.6)}、0.45 以上 ${frac(ok, (row) => row.score >= 0.45)}、0.35 以上 ${frac(ok, (row) => row.score >= 0.35)}（10/25/50% 点 ${q(ok)}） / 外れ ${bad.length} 件のうち 0.6 以上 ${frac(bad, (row) => row.score >= 0.6)}、0.45 以上 ${frac(bad, (row) => row.score >= 0.45)}、0.35 以上 ${frac(bad, (row) => row.score >= 0.35)}`);
     }
     if (r.rows[0] && r.rows[0].timing) {
       const sum = {};

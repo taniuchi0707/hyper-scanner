@@ -51,6 +51,8 @@
   const REFINE_LONG = 1600; // 写真から探すときは、最後にこの解像度で辺を合わせ直す
   // 撮影中の検出の解像度。ふだんは 384、1 回の検出に時間がかかる端末では 320 に下げる（ワーカーで動くので画面は止まらない）
   const LIVE_LONG = 384, LIVE_LONG_SLOW = 320;
+  // 撮影中に枠を出す点数の下限。正しく見つけたときはほぼ 0.45 を超え、周りの書類などを誤って囲んだときは下回りやすい
+  const SHOW_SCORE = 0.45;
   const LIVE_GAP = 80; // 撮影中の検出は 1 秒に約 12 回まで。端末が熱で遅くならないようにする（枠は描画側でなめらかに動かす）
   const PREVIEW_SIZE = { w: 1920, h: 1440 }; // 撮影画面の映像の大きさ
   const LARGE_SIZE = { w: 4096, h: 3072 }; // 写真として撮れない端末で、撮る瞬間だけ頼む映像の大きさ
@@ -521,7 +523,7 @@
 
   function onDetected(cam, found) {
     const now = performance.now();
-    if (found && found.score >= 0.35 && cam.quad && quadMove(cam.quad, found.quad) >= 0.08 && now - cam.lastSeen < 900) {
+    if (found && found.score >= SHOW_SCORE && cam.quad && quadMove(cam.quad, found.quad) >= 0.08 && now - cam.lastSeen < 900) {
       // 別の場所へ大きく飛んだときは、続けて同じあたりに見つかるまで前の枠を残す（枠が行き来してちらつかないように）
       const same = cam.jump && quadMove(cam.jump, found.quad) < 0.05;
       cam.jump = found.quad;
@@ -529,7 +531,7 @@
     } else {
       cam.jump = null;
     }
-    if (found && found.score >= 0.35) {
+    if (found && found.score >= SHOW_SCORE) {
       const q = found.quad;
       const prev = cam.quad;
       const moved = prev ? quadMove(prev, q) : 1;
