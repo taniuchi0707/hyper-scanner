@@ -119,6 +119,14 @@
       if (q.every(([x, y]) => x > 12 && y > 12 && x < W - 12 && y < H - 12)) break;
       if (k >= 3) Z *= 1.08;
     }
+    if (params.get('out')) {
+      // ?out=1: 書類の一部が画面の外に出るようにずらす（撮影画面で「はみ出し」を知らせられるかを見る）
+      const xr = mulberry32(seed + 77);
+      const ang = xr() * Math.PI * 2;
+      const span = Math.max(...q.map((p) => p[0])) - Math.min(...q.map((p) => p[0]));
+      const dx = Math.cos(ang) * span * (0.25 + xr() * 0.25), dy = Math.sin(ang) * span * (0.25 + xr() * 0.25);
+      q = q.map(([x, y]) => [x + dx, y + dy]);
+    }
 
     const bg = drawBackground(rnd, cfg.bg, W, H);
     const bx = bg.getContext('2d');
@@ -341,13 +349,14 @@
     const t2 = performance.now() - t0;
     if (frame) frame.close();
     const v2 = evaluate(found && found.quad, scene.gt, scene.W, scene.H);
+    const edgeOf = (qn) => (!qn ? 'none' : qn.some(([x, y]) => x < 0.012 || y < 0.012 || x > 0.988 || y > 0.988) ? 'touch' : 'inner');
     // 縦横比の見積もり: 正解の四隅から求めた幅/高さと、本当の 1/aspect を比べる（素朴な辺の長さの比とも比べる）
     const trueRatio = 1 / cfg.aspect;
     const est = Geo.estimateAspect(scene.gt, scene.W, scene.H);
     const out = Geo.outputAspect(scene.gt, scene.W, scene.H, null);
     const sz = Geo.quadSize(scene.gt);
     const row = {
-      name: cfg.name, bg: cfg.bg, kind: cfg.kind, inside, v1: v1.err, prev: prev.err, v2: v2.err, score: found ? found.score : 0, t1, tp, t2,
+      name: cfg.name, bg: cfg.bg, kind: cfg.kind, inside, edge: edgeOf(found && found.quad), v1: v1.err, prev: prev.err, v2: v2.err, score: found ? found.score : 0, t1, tp, t2,
       aspZhang: est ? Math.abs(est / trueRatio - 1) : 1,
       aspOut: Math.abs(out / trueRatio - 1),
       aspNaive: Math.abs(sz.w / sz.h / trueRatio - 1),
@@ -449,6 +458,16 @@
     scene.bmp.close();
   }
 
+  if (params.get('out')) {
+    // はみ出した場面: 検出した四角形が画面のふち（1.2% 以内）に触れていれば「はみ出し」を知らせられる。
+    // ふちに触れず内側の別の四角形を返したら誤り、見つからなければ「四隅が入るように」の案内になる
+    const out = rows.filter((r) => !r.inside);
+    const touch = out.filter((r) => r.edge === 'touch').length, inner = out.filter((r) => r.edge === 'inner').length, none = out.filter((r) => r.edge === 'none').length;
+    const summaryOut = { scenes: out.length, touch, inner, none, innerNames: out.filter((r) => r.edge === 'inner').map((r) => r.name) };
+    status.textContent = JSON.stringify(summaryOut);
+    window.__bench = { profile: summaryOut, rows };
+    return;
+  }
   const valid = rows.filter((r) => r.inside);
   const rate = (key, lim) => valid.filter((r) => r[key] < lim).length / valid.length;
   const median = (arr) => { const a = arr.slice().sort((p, q) => p - q); return a[(a.length / 2) | 0]; };

@@ -424,15 +424,18 @@ function DetectModule(Geo, Imaging) {
   // 角らしさ。本物の書類の角は、2 本の辺の境目が角のすぐ近くまで続き、角の先では途切れる。
   // 布の格子柄や机の線で作った四角形は、線が角の先まで続いたり、角の近くに境目がなかったりする。
   // sd[i] は角 i から角 i+1 への辺: endA / endB は両端の近く、extA / extB は両端の先の強さ（-1 は画像の外）
-  function cornerFactor(sd) {
+  function cornerFactor(sd, mix = 0) {
     let sum = 0;
     for (let i = 0; i < 4; i++) {
       const a = sd[(i + 3) % 4], b = sd[i]; // a は角 i で終わる辺、b は角 i から始まる辺
-      let e = 0, en = 0, x = 0, xn = 0;
-      if (!a.border) { if (a.endB >= 0) { e += a.endB; en++; } x += Math.max(0, a.extB); xn++; }
-      if (!b.border) { if (b.endA >= 0) { e += b.endA; en++; } x += Math.max(0, b.extA); xn++; }
+      let e = 0, en = 0, x = 0, xn = 0, eMin = 1, xMax = 0;
+      if (!a.border) { if (a.endB >= 0) { e += a.endB; en++; eMin = Math.min(eMin, a.endB); } x += Math.max(0, a.extB); xMax = Math.max(xMax, a.extB); xn++; }
+      if (!b.border) { if (b.endA >= 0) { e += b.endA; en++; eMin = Math.min(eMin, b.endA); } x += Math.max(0, b.extA); xMax = Math.max(xMax, b.extA); xn++; }
       e = en ? e / en : 0.8;
       x = xn ? x / xn : 0;
+      // mix > 0 のとき、弱いほうの辺に寄せる（片方の辺だけが角で途切れる T 字を、角とみなさない）
+      if (en) e = (1 - mix) * e + mix * eMin;
+      if (xn) x = (1 - mix) * x + mix * xMax;
       sum += Math.min(1, Math.max(0, (e - 0.1) / 0.5)) * (1 - 0.85 * Math.min(1, Math.max(0, (x - 0.25) / 0.5)));
     }
     return 0.55 + 0.45 * (sum / 4);
@@ -480,7 +483,7 @@ function DetectModule(Geo, Imaging) {
     return 1 + 0.2 * Math.exp(-((d / long / 0.04) ** 2));
   }
 
-  function makeScorer(ctx, aspect, prior) {
+  function makeScorer(ctx, aspect, prior, cornerMix = 0) {
     const { w, h, gscale } = ctx;
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
@@ -601,7 +604,7 @@ function DetectModule(Geo, Imaging) {
       const inside = interior(q);
       s *= 0.55 + 0.45 * Math.min(1, Math.max(0, (inside.uni - 0.35) / 0.35));
       s *= 1 - 0.45 * Math.min(1, Math.max(0, (inside.margin - 0.08) / 0.25));
-      const corner = cornerFactor(sides);
+      const corner = cornerFactor(sides, cornerMix);
       s *= corner;
       s *= aspectFactor(q, w, h, aspect);
       s *= priorFactor(q, prior, ctx.long);
@@ -689,7 +692,7 @@ function DetectModule(Geo, Imaging) {
 
   // 4 本の直線（a1, a2 が向かい合い、b1, b2 が向かい合う）の四角形を、累積和だけで採点する。
   // 内側の均一さは見ないので、上位の候補だけを makeScorer で採点し直す
-  function makeFastScorer(ctx, aspect, prior) {
+  function makeFastScorer(ctx, aspect, prior, cornerMix = 0) {
     const { w, h } = ctx;
     const seg = { sup: 0, valid: false, plus: 0, minus: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
     const sides = [null, null, null, null];
@@ -741,7 +744,7 @@ function DetectModule(Geo, Imaging) {
       s *= con >= 0 ? 0.65 + 0.35 * Math.min(1, con / 0.12) : 0.65 - 0.25 * Math.min(1, -con / 0.12);
       s *= Math.min(1, Math.sqrt(area / 0.12)) * (0.9 + 0.1 * Math.min(1, area / 0.6));
       s *= 1 - 0.35 * (dev / 55) ** 2;
-      s *= cornerFactor(sd);
+      s *= cornerFactor(sd, cornerMix);
       if (aspect || prior) {
         const oq = Geo.orderQuad(pts);
         s *= aspectFactor(oq, w, h, aspect) * priorFactor(oq, prior, ctx.long);
@@ -933,7 +936,9 @@ function DetectModule(Geo, Imaging) {
     mark('prepare');
     const { w, h, gx, gy, mag, gscale } = ctx;
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
-    const score = makeScorer(ctx, aspect, priorPx);
+    // 角らしさは、2 本の辺の平均と弱いほうを半々に見る
+    const cornerMix = 0.5;
+    const score = makeScorer(ctx, aspect, priorPx, cornerMix);
     const candidates = [];
     const add = (q, from) => {
       if (!q || q.some((p) => !p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return;
@@ -985,7 +990,7 @@ function DetectModule(Geo, Imaging) {
         pairs.push([lines[i], lines[j]]);
       }
     }
-    const fast = makeFastScorer(ctx, aspect, priorPx);
+    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix);
     const KEEP = 24;
     const shortlist = []; // { s, a1, a2, b1, b2 }（点の高い順に KEEP 件）
     let tried = 0;
