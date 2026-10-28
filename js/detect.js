@@ -483,7 +483,7 @@ function DetectModule(Geo, Imaging) {
     return 1 + 0.2 * Math.exp(-((d / long / 0.04) ** 2));
   }
 
-  function makeScorer(ctx, aspect, prior, cornerMix = 0) {
+  function makeScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4) {
     const { w, h, gscale } = ctx;
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
@@ -499,7 +499,7 @@ function DetectModule(Geo, Imaging) {
       const dx = Q[0] - P[0], dy = Q[1] - P[1];
       const len = Math.hypot(dx, dy);
       if (len < 6) return { sup: 0, con: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
-      if (onBorder(P, Q)) return { sup: 0.4, con: 0.04, border: true };
+      if (onBorder(P, Q)) return { sup: borderSup, con: 0.04, border: true };
       let nx = -dy / len, ny = dx / len;
       if ((cx - (P[0] + Q[0]) / 2) * nx + (cy - (P[1] + Q[1]) / 2) * ny < 0) { nx = -nx; ny = -ny; }
       // 辺の上の t0〜t1（0 が P、1 が Q）の境目の強さの平均。画像の外なら -1
@@ -692,7 +692,7 @@ function DetectModule(Geo, Imaging) {
 
   // 4 本の直線（a1, a2 が向かい合い、b1, b2 が向かい合う）の四角形を、累積和だけで採点する。
   // 内側の均一さは見ないので、上位の候補だけを makeScorer で採点し直す
-  function makeFastScorer(ctx, aspect, prior, cornerMix = 0) {
+  function makeFastScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4) {
     const { w, h } = ctx;
     const seg = { sup: 0, valid: false, plus: 0, minus: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
     const sides = [null, null, null, null];
@@ -725,7 +725,7 @@ function DetectModule(Geo, Imaging) {
         let sup;
         sd[i].border = !!l.border;
         if (l.border) {
-          sup = 0.4;
+          sup = borderSup;
         } else {
           if (!segment(l.prof, A, B, seg)) return null;
           sup = seg.sup;
@@ -938,7 +938,8 @@ function DetectModule(Geo, Imaging) {
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
     // 角らしさは、2 本の辺の平均と弱いほうを半々に見る
     const cornerMix = 0.5;
-    const score = makeScorer(ctx, aspect, priorPx, cornerMix);
+    const borderSup = 0.5; // 画面のふちを辺にするときの境目の強さ（はみ出した書類を、ふちまでの四角形として返す）
+    const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup);
     const candidates = [];
     const add = (q, from) => {
       if (!q || q.some((p) => !p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return;
@@ -990,7 +991,7 @@ function DetectModule(Geo, Imaging) {
         pairs.push([lines[i], lines[j]]);
       }
     }
-    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix);
+    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix, borderSup);
     const KEEP = 24;
     const shortlist = []; // { s, a1, a2, b1, b2 }（点の高い順に KEEP 件）
     let tried = 0;
