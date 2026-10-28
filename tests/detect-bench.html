@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>四隅検出ベンチマーク</title>
+<style>
+  body { margin: 16px; font: 13px/1.5 system-ui, sans-serif; background: #f4f5f6; color: #111; }
+  #status { font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+  #grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  figure { margin: 0; background: #fff; padding: 6px; border-radius: 6px; }
+  figcaption { font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+  .legend span { display: inline-block; margin-right: 12px; }
+</style>
+</head>
+<body>
+<h1>四隅検出ベンチマーク</h1>
+<p class="legend"><span style="color:#22c55e">■ 正解</span><span style="color:#f97316">■ 旧方式</span><span style="color:#06b6d4">■ 新方式</span>
+  ずれは長辺に対する割合。?long=480 で検出時の解像度、?aspect=1.414 で縦横比の指定、?only=#01,#02 で場面を絞れます。</p>
+<p id="status">準備中…</p>
+<div id="grid"></div>
+<script src="../js/geometry.js"></script>
+<script src="../js/imaging.js"></script>
+<script src="legacy-detect.js"></script>
+<script src="../js/detect.js"></script>
+<script src="bench.js"></script>
+</body>
+</html>

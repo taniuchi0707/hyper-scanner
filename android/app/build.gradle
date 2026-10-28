@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+// GitHub Actions の実行番号をバージョンにする（手元では 1）
+def runNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+def keystoreFile = System.getenv('HS_KEYSTORE_FILE')
+
+android {
+    namespace 'io.github.taniuchi0707.hyperscanner'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.github.taniuchi0707.hyperscanner'
+        minSdk 29
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreFile) {
+                storeFile file(keystoreFile)
+                storeType 'pkcs12'
+                storePassword System.getenv('HS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('HS_KEY_ALIAS')
+                keyPassword System.getenv('HS_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 署名鍵がないとき（手元での試しのビルド）はデバッグ用の鍵で署名する
+            signingConfig keystoreFile ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+    implementation 'androidx.core:core:1.13.1'
+}

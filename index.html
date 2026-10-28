@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- artifact:head-begin -->
+<title>Hyper Scanner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<!-- artifact:head-end -->
+<meta name="description" content="スマホのカメラで書類を撮影し、傾きと影を補正して PDF にまとめるスキャナー">
+<meta name="theme-color" content="#EEF1F2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F1518" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scanner">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- artifact:body-begin -->
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand"><span class="brand-beam" aria-hidden="true"></span>Hyper Scanner</div>
+      <button class="icon-btn" id="btn-menu" type="button" aria-label="メニュー" aria-haspopup="dialog"><span data-icon="more"></span></button>
+    </div>
+    <input class="title-input" id="doc-title" type="text" aria-label="書類の名前" autocomplete="off" spellcheck="false" maxlength="80">
+    <p class="doc-meta" id="doc-meta"></p>
+  </header>
+
+  <div class="notice" id="viewer-notice" hidden>
+    <p>claude.ai の画面の中では、カメラや写真の選択が使えないことがあります。そのときはブラウザ版か Android アプリをお使いください。</p>
+    <a class="text-btn" href="https://taniuchi0707.github.io/hyper-scanner/" target="_blank" rel="noopener">ブラウザで開く</a>
+  </div>
+
+  <div class="notice" id="sample-notice" hidden>
+    <p>サンプルのページを表示しています。撮影を始めると自動で消えます。</p>
+    <button class="text-btn" id="btn-clear-sample" type="button">今すぐ消す</button>
+  </div>
+
+  <main class="pages" id="pages">
+    <ol class="page-grid" id="page-grid" aria-label="ページ"></ol>
+    <div class="empty" id="empty" hidden>
+      <div class="empty-frame" aria-hidden="true"><span class="empty-beam"></span></div>
+      <h2>まだページがありません</h2>
+      <p>下の丸いボタンで書類を撮ると、ここにページが並びます。四隅を見つけて、傾きと影を自動で補正します。</p>
+      <button class="btn ghost" id="btn-sample" type="button">サンプルで試す</button>
+    </div>
+  </main>
+
+  <nav class="dock" aria-label="操作">
+    <label class="dock-btn file-btn" id="btn-gallery"><input type="file" id="file-gallery" accept="image/*" multiple aria-label="画像を追加"><span data-icon="image"></span><span>画像を追加</span></label>
+    <label class="scan-btn file-btn" id="btn-scan"><input type="file" id="file-camera" accept="image/*" capture="environment" aria-label="カメラでスキャン"><span data-icon="camera"></span></label>
+    <button class="dock-btn" id="btn-export" type="button"><span data-icon="download"></span><span>PDFにする</span></button>
+  </nav>
+</div>
+
+<section class="camera" id="camera" aria-label="カメラ" hidden>
+  <div class="cam-top">
+    <button class="round-btn" id="cam-close" type="button" aria-label="カメラを閉じる"><span data-icon="close"></span></button>
+    <p class="cam-hint" id="cam-hint">書類の四隅が入るように構えてください</p>
+    <div class="cam-actions">
+      <button class="pill-btn" id="cam-auto" type="button" aria-pressed="false" aria-label="自動撮影">自動</button>
+      <button class="round-btn" id="cam-torch" type="button" aria-label="ライト" aria-pressed="false" hidden><span data-icon="torch"></span></button>
+    </div>
+  </div>
+  <div class="cam-view" id="cam-view">
+    <video id="cam-video" playsinline muted autoplay></video>
+    <canvas id="cam-overlay"></canvas>
+    <div class="cam-flash" id="cam-flash"></div>
+  </div>
+  <div class="cam-bottom">
+    <label class="cam-side file-btn" id="cam-gallery"><input type="file" id="file-cam-gallery" accept="image/*" multiple aria-label="画像を選んで追加"><span data-icon="image"></span><span>画像</span></label>
+    <button class="shutter" id="cam-shutter" type="button" aria-label="撮影"><span></span></button>
+    <button class="cam-side cam-done" id="cam-done" type="button"><span class="cam-thumb" id="cam-thumb"></span><span id="cam-count">完了</span></button>
+  </div>
+</section>
+
+<section class="editor" id="editor" aria-label="ページの編集" hidden>
+  <header class="ed-head">
+    <button class="round-btn" id="ed-back" type="button" aria-label="一覧に戻る"><span data-icon="back"></span></button>
+    <div class="ed-title"><span id="ed-pno">P.01</span><span class="ed-of" id="ed-of">/ 01</span></div>
+    <div class="ed-head-actions">
+      <div class="order-ctl">
+        <span>順番</span>
+        <button class="round-btn small" id="ed-prev" type="button" aria-label="前に移動"><span data-icon="chev-left"></span></button>
+        <button class="round-btn small" id="ed-next" type="button" aria-label="後ろに移動"><span data-icon="chev-right"></span></button>
+      </div>
+      <button class="round-btn danger" id="ed-delete" type="button" aria-label="このページを削除"><span data-icon="trash"></span></button>
+    </div>
+  </header>
+  <div class="seg" role="tablist" aria-label="編集の段階">
+    <button type="button" role="tab" id="ed-tab-crop" aria-selected="true">範囲</button>
+    <button type="button" role="tab" id="ed-tab-finish" aria-selected="false">仕上げ</button>
+  </div>
+  <div class="ed-stage" id="ed-stage">
+    <canvas id="ed-canvas"></canvas>
+    <svg id="ed-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+    <canvas class="loupe" id="ed-loupe" hidden></canvas>
+    <div class="ed-busy" id="ed-busy" hidden><span class="spinner"></span>処理中</div>
+  </div>
+  <div class="ed-tools" id="ed-tools-crop">
+    <button class="tool" id="ed-auto" type="button"><span data-icon="wand"></span>自動検出</button>
+    <button class="tool" id="ed-full" type="button"><span data-icon="expand"></span>画像全体</button>
+  </div>
+  <div class="ed-tools" id="ed-tools-finish" hidden>
+    <div class="chips" id="ed-filters" role="radiogroup" aria-label="仕上がり">
+      <button type="button" role="radio" data-filter="enhance">くっきり</button>
+      <button type="button" role="radio" data-filter="color">カラー</button>
+      <button type="button" role="radio" data-filter="gray">グレー</button>
+      <button type="button" role="radio" data-filter="bw">白黒</button>
+    </div>
+    <div class="rot">
+      <button class="round-btn small" id="ed-rot-left" type="button" aria-label="左に回転"><span data-icon="rot-left"></span></button>
+      <button class="round-btn small" id="ed-rot-right" type="button" aria-label="右に回転"><span data-icon="rot-right"></span></button>
+    </div>
+  </div>
+  <p class="ed-info" id="ed-info"></p>
+  <footer class="ed-foot">
+    <label class="btn stage-ghost file-btn" id="ed-retake"><input type="file" id="file-retake" accept="image/*" capture="environment" aria-label="撮り直す"><span data-icon="camera"></span>撮り直す</label>
+    <button class="btn stage-primary" id="ed-done" type="button"><span data-icon="check"></span>完了</button>
+  </footer>
+</section>
+
+<div class="backdrop" id="backdrop" hidden></div>
+
+<section class="sheet" id="sheet-export" role="dialog" aria-modal="true" aria-labelledby="exp-title" hidden>
+  <div class="sheet-grip" aria-hidden="true"></div>
+  <h2 id="exp-title">PDFに書き出す</h2>
+  <div class="field">
+    <label for="exp-name">ファイル名</label>
+    <div class="name-row"><input id="exp-name" type="text" autocomplete="off" spellcheck="false" maxlength="80"><span>.pdf</span></div>
+  </div>
+  <fieldset class="field">
+    <legend>用紙サイズ</legend>
+    <div class="opts">
+      <label><input type="radio" name="exp-size" id="exp-size-auto" value="auto" checked><span>自動</span></label>
+      <label><input type="radio" name="exp-size" id="exp-size-a4" value="a4"><span>A4</span></label>
+      <label><input type="radio" name="exp-size" id="exp-size-b5" value="b5"><span>B5</span></label>
+      <label><input type="radio" name="exp-size" id="exp-size-letter" value="letter"><span>レター</span></label>
+    </div>
+  </fieldset>
+  <fieldset class="field">
+    <legend>画質</legend>
+    <div class="opts">
+      <label><input type="radio" name="exp-quality" id="exp-q-light" value="light"><span>軽量<small>100 dpi</small></span></label>
+      <label><input type="radio" name="exp-quality" id="exp-q-standard" value="standard" checked><span>標準<small>150 dpi</small></span></label>
+      <label><input type="radio" name="exp-quality" id="exp-q-high" value="high"><span>高画質<small>200 dpi</small></span></label>
+    </div>
+  </fieldset>
+  <p class="exp-note" id="exp-note"></p>
+  <div class="progress" id="exp-progress" hidden>
+    <div class="progress-bar"><span id="exp-bar"></span></div>
+    <p id="exp-status"></p>
+  </div>
+  <div class="sheet-actions">
+    <button class="btn ghost" id="exp-share" type="button" hidden><span data-icon="share"></span>共有</button>
+    <button class="btn primary" id="exp-save" type="button"><span data-icon="download"></span>PDFを保存</button>
+  </div>
+</section>
+
+<section class="sheet" id="sheet-menu" role="dialog" aria-modal="true" aria-label="メニュー" hidden>
+  <div class="sheet-grip" aria-hidden="true"></div>
+  <button class="menu-item" id="menu-new" type="button"><span data-icon="trash"></span><span><strong>新しい書類を始める</strong><small>今のページをすべて消します</small></span></button>
+  <button class="menu-item" id="menu-sample" type="button"><span data-icon="image"></span><span><strong>サンプルを読み込む</strong><small>撮影しなくても補正の流れを試せます</small></span></button>
+
+  <h2 class="sheet-section">設定</h2>
+  <fieldset class="field">
+    <legend>書類の形</legend>
+    <div class="opts">
+      <label><input type="radio" name="set-shape" id="set-shape-free" value="free" checked><span>自由<small>比率なし</small></span></label>
+      <label><input type="radio" name="set-shape" id="set-shape-iso" value="iso"><span>A判・B判<small>1 : 1.41</small></span></label>
+      <label><input type="radio" name="set-shape" id="set-shape-letter" value="letter"><span>レター<small>1 : 1.29</small></span></label>
+      <label><input type="radio" name="set-shape" id="set-shape-card" value="card"><span>名刺<small>1 : 1.62</small></span></label>
+    </div>
+    <p class="field-note">形を選ぶと、その縦横比の書類を見つけやすくなり、仕上がりもその比率にそろいます。</p>
+  </fieldset>
+  <label class="switch-row" for="set-auto">
+    <span><strong>自動撮影</strong><small>撮影画面で書類を見つけ、手ぶれが収まると自動でシャッターを切ります</small></span>
+    <input type="checkbox" id="set-auto" role="switch">
+  </label>
+
+  <a class="menu-item" id="link-apk" href="https://github.com/taniuchi0707/hyper-scanner/releases/latest/download/hyper-scanner.apk" target="_blank" rel="noopener"><span data-icon="download"></span><span><strong>Android アプリをダウンロード</strong><small>APK をインストールすると、ホーム画面から使えます</small></span></a>
+  <a class="menu-item" id="link-web" href="https://taniuchi0707.github.io/hyper-scanner/" target="_blank" rel="noopener" hidden><span data-icon="share"></span><span><strong>ブラウザ版を開く</strong><small>taniuchi0707.github.io/hyper-scanner</small></span></a>
+  <p class="menu-foot">撮ったページはこの端末の中だけに保存されます。どこにも送信されません。</p>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toast-text"></span><button class="toast-action" id="toast-action" type="button" hidden></button></div>
+<div class="dropzone" id="dropzone" hidden><p>画像をドロップしてページを追加</p></div>
+<!-- artifact:body-end -->
+<script src="js/geometry.js"></script>
+<script src="js/imaging.js"></script>
+<script src="js/detect.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/store.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

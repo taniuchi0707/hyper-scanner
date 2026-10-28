@@ -1,0 +1,12 @@
+{
+  "name": "hyper-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "スマホのカメラで書類を撮影し、傾きと影を補正して PDF にまとめるスキャナー（PWA）",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "build:artifact": "node scripts/build-artifact.mjs",
+    "sync:android": "node scripts/sync-android.mjs"
+  }
+}

@@ -1,0 +1,74 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'css/**'
+      - 'js/**'
+      - 'icons/**'
+      - 'manifest.webmanifest'
+      - 'android/**'
+      - 'scripts/sync-android.mjs'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Web 版のファイルをアプリに入れる
+        run: node scripts/sync-android.mjs
+
+      - name: 署名鍵を用意する
+        env:
+          HS_KEYSTORE_B64: ${{ secrets.HS_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$HS_KEYSTORE_B64" ]; then
+            echo "$HS_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            echo "HS_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          fi
+
+      - name: APK をビルドする
+        working-directory: android
+        env:
+          HS_KEYSTORE_PASSWORD: ${{ secrets.HS_KEYSTORE_PASSWORD }}
+          HS_KEY_ALIAS: ${{ secrets.HS_KEY_ALIAS }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: ファイル名をそろえる
+        run: cp android/app/build/outputs/apk/release/app-release.apk hyper-scanner.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hyper-scanner-apk
+          path: hyper-scanner.apk
+
+      - name: リリースに載せる
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v1.0.${{ github.run_number }}"
+          gh release create "$tag" hyper-scanner.apk \
+            --title "Hyper Scanner $tag" \
+            --notes "Android 用のアプリです。スマホで hyper-scanner.apk をダウンロードして開くと、インストールできます。" \
+            --latest

@@ -1,0 +1,17 @@
+# ビルドで作られるもの
+dist/
+*.apk
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/www/
+
+# APK の署名鍵（絶対に公開しない）
+android/keystore/
+*.p12
+*.jks
+
+# 個人の設定
+.claude/settings.local.json
+node_modules/
