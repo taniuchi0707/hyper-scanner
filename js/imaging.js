@@ -232,10 +232,17 @@ function ImagingModule(Geo) {
     const { w: outW, h: outH, q, qLong } = outputSize(source, quadN, maxLong, aspect);
     // 出力に見合う解像度まで元画像を縮めてから変換する（縮小しすぎのギザギザを防ぐ）
     const scale = Math.min(1, (Math.max(outW, outH) * 1.25) / qLong);
-    const srcCanvas = scale < 1 ? scaleTo(source, Math.round(sw * scale), Math.round(sh * scale)) : scaleTo(source, sw, sh);
-    const sx = srcCanvas.width / sw, sy = srcCanvas.height / sh;
+    // 四隅を囲む範囲だけを切り出して読む（書類の外の背景は使わないので、縮める手間も読み出しも減る）
+    const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+    const bx0 = Math.max(0, Math.floor(Math.min(...xs)) - 2), by0 = Math.max(0, Math.floor(Math.min(...ys)) - 2);
+    const bx1 = Math.min(sw, Math.ceil(Math.max(...xs)) + 2), by1 = Math.min(sh, Math.ceil(Math.max(...ys)) + 2);
+    const bw = Math.max(1, bx1 - bx0), bh = Math.max(1, by1 - by0);
+    const crop = makeCanvas(bw, bh);
+    ctx2d(crop).drawImage(source, bx0, by0, bw, bh, 0, 0, bw, bh);
+    const srcCanvas = scale < 1 ? scaleTo(crop, Math.max(1, Math.round(bw * scale)), Math.max(1, Math.round(bh * scale))) : crop;
+    const sx = srcCanvas.width / bw, sy = srcCanvas.height / bh;
     const src = ctx2d(srcCanvas).getImageData(0, 0, srcCanvas.width, srcCanvas.height);
-    return warp(src, q.map(([x, y]) => [x * sx, y * sy]), outW, outH);
+    return warp(src, q.map(([x, y]) => [(x - bx0) * sx, (y - by0) * sy]), outW, outH);
   }
 
   function clone(img) {
