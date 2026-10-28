@@ -703,7 +703,9 @@
     const cur = Math.max(video.videoWidth, video.videoHeight);
     const most = Math.max((caps.width && caps.width.max) || 0, (caps.height && caps.height.max) || 0);
     if (most < cur * 1.25 || typeof track.applyConstraints !== 'function') return null;
-    const base = track.getConstraints ? track.getConstraints() : {};
+    // 元の頼み方に戻すため。取れない端末では、撮影画面の映像の大きさを頼み直す（空のまま戻すと 640×480 になる）
+    let base = track.getConstraints ? track.getConstraints() : {};
+    if (!base || !base.width) base = { ...(base || {}), width: { ideal: PREVIEW_SIZE.w }, height: { ideal: PREVIEW_SIZE.h } };
     try {
       await track.applyConstraints({ ...base, width: { ideal: LARGE_SIZE.w }, height: { ideal: LARGE_SIZE.h } });
       if (!(await videoGrows(video, cur, 2500))) return null;
