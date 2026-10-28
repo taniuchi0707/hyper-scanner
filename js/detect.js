@@ -493,6 +493,13 @@ function DetectModule(Geo, Imaging) {
     };
   }
 
+  // 画面の中ほどにある四角形を少し選びやすくする（撮りたい書類は真ん中に置くことが多く、周りの書類はふちにかかる）
+  function centerFactor(cx, cy, w, h, k) {
+    if (!k) return 1;
+    const dx = cx / w - 0.5, dy = cy / h - 0.5;
+    return 1 - k * Math.min(1, (dx * dx + dy * dy) / 0.5);
+  }
+
   function lumSampler({ w, h, L }) {
     return (x, y) => {
       const xi = Math.round(x - 0.5), yi = Math.round(y - 0.5);
@@ -520,7 +527,7 @@ function DetectModule(Geo, Imaging) {
     return 1 + 0.2 * Math.exp(-((d / long / 0.04) ** 2));
   }
 
-  function makeScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4) {
+  function makeScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0) {
     const { w, h, gscale } = ctx;
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
@@ -647,6 +654,7 @@ function DetectModule(Geo, Imaging) {
       s *= corner;
       s *= aspectFactor(q, w, h, aspect);
       s *= priorFactor(q, prior, ctx.long);
+      s *= centerFactor(cx, cy, w, h, center);
       if (explain) {
         const r2 = (v) => Math.round(v * 100) / 100;
         Object.assign(explain, {
@@ -731,7 +739,7 @@ function DetectModule(Geo, Imaging) {
 
   // 4 本の直線（a1, a2 が向かい合い、b1, b2 が向かい合う）の四角形を、累積和だけで採点する。
   // 内側の均一さは見ないので、上位の候補だけを makeScorer で採点し直す
-  function makeFastScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4) {
+  function makeFastScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0) {
     const { w, h } = ctx;
     const seg = { sup: 0, valid: false, plus: 0, minus: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
     const sides = [null, null, null, null];
@@ -785,6 +793,7 @@ function DetectModule(Geo, Imaging) {
       s *= Math.min(1, Math.sqrt(area / 0.12)) * (0.9 + 0.1 * Math.min(1, area / 0.6));
       s *= 1 - 0.35 * (dev / 55) ** 2;
       s *= cornerFactor(sd, cornerMix);
+      s *= centerFactor(cx, cy, w, h, center);
       if (aspect || prior) {
         const oq = Geo.orderQuad(pts);
         s *= aspectFactor(oq, w, h, aspect) * priorFactor(oq, prior, ctx.long);
@@ -1000,7 +1009,8 @@ function DetectModule(Geo, Imaging) {
     // 画面のふちを辺にするときの境目の強さ。上げると、はみ出した書類をふちまでの四角形として返しやすいが、
     // 周りに置いたほかの書類（ふちにかかる）を選びやすくなるので、0.4 にとどめる
     const borderSup = 0.4;
-    const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup);
+    const center = 0.25; // 画面の中ほどを選びやすくする強さ（四隅の近くで最大 25% 下げる）
+    const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup, center);
     const candidates = [];
     const add = (q, from) => {
       if (!q || q.some((p) => !p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return;
@@ -1052,7 +1062,7 @@ function DetectModule(Geo, Imaging) {
         pairs.push([lines[i], lines[j]]);
       }
     }
-    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix, borderSup);
+    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix, borderSup, center);
     const KEEP = 24;
     const shortlist = []; // { s, a1, a2, b1, b2 }（点の高い順に KEEP 件）
     let tried = 0;
