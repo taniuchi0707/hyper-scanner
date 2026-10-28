@@ -950,7 +950,8 @@ function DetectModule(Geo, Imaging) {
     const aligned = alignedSampler(ctx);
     const band = bandSampler(ctx);
     const edges = thinEdges(gx, gy, mag, w, h, 0.15 * gscale);
-    const lines = houghLines(edges, gx, gy, w, h, quick ? 22 : 36, Math.max(12, Math.round(0.1 * ctx.long)), exp.perDir ? 9 : undefined)
+    // 短い辺（レシートや名刺）や、指で一部が隠れた辺も拾えるよう、票の下限は長辺の 6% にする
+    const lines = houghLines(edges, gx, gy, w, h, quick ? 22 : 36, Math.max(12, Math.round(0.06 * ctx.long)))
       .map((l) => ({ ...l, prof: profileLine(l, ctx, strong, grad, band, aligned) }))
       .filter((l) => l.prof);
     mark('lines');
@@ -1072,6 +1073,21 @@ function DetectModule(Geo, Imaging) {
         refined: top.map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
         regions: candidates.filter((c) => c.from !== 'lines').map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
         scoreOf: (qn) => score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h]))),
+        // 正解の各辺にいちばん近い直線で、手早い採点をしたときの点数（直線の組み合わせで落ちていないかを見る）
+        fastOf: (qn) => {
+          const q = Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h]));
+          const pick = (A, B) => {
+            let best = null, bd = Infinity;
+            for (const l of lines) {
+              const d = Math.max(Math.abs(l.c * A[0] + l.s * A[1] - l.rho), Math.abs(l.c * B[0] + l.s * B[1] - l.rho));
+              if (d < bd) { bd = d; best = l; }
+            }
+            return { l: best, d: +bd.toFixed(1) };
+          };
+          const s0 = pick(q[0], q[1]), s1 = pick(q[1], q[2]), s2 = pick(q[2], q[3]), s3 = pick(q[3], q[0]);
+          const f = fast(s0.l, s2.l, s3.l, s1.l);
+          return { fast: f === null ? null : +f.toFixed(3), dist: [s0.d, s1.d, s2.d, s3.d], cut: shortlist.length ? +shortlist[shortlist.length - 1].s.toFixed(3) : null };
+        },
         explain: (qn) => { const ex = {}; score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h])), ex); return ex; },
       };
     }

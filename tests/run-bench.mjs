@@ -121,7 +121,7 @@ try {
         console.log('   票: ' + JSON.stringify(row.gtVotes) + ' / ' + row.voteTop);
         console.log('   領域: ' + JSON.stringify(regions));
         console.log('   精密化後: ' + JSON.stringify(refined));
-        console.log('   正解: ' + JSON.stringify(gtExplain));
+        console.log('   正解: ' + JSON.stringify(gtExplain) + ' / 手早い採点: ' + JSON.stringify(row.gtFast));
         console.log('   選択: ' + JSON.stringify(bestExplain));
       }
     }

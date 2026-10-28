@@ -357,6 +357,7 @@
       const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
       row.gtScore = found.debug.scoreOf(gtN);
       row.gtExplain = found.debug.explain(gtN);
+      row.gtFast = found.debug.fastOf(gtN);
       row.bestExplain = found.debug.explain(found.quad);
       row.unrefinedErr = evaluate(found.debug.unrefined, scene.gt, scene.W, scene.H).err;
       row.refined = found.debug.refined.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4), area: +(Geo.area(c.q.map(([x, y]) => [x, y])) ).toFixed(3) }));
@@ -412,6 +413,16 @@
           for (const l of all.slice(0, 12)) { const cc = Math.cos(l.t * Math.PI / 180), ss = Math.sin(l.t * Math.PI / 180); vx.beginPath(); vx.moveTo(cc * l.rho - ss * 2000, ss * l.rho + cc * 2000); vx.lineTo(cc * l.rho + ss * 2000, ss * l.rho - cc * 2000); vx.stroke(); }
           vc.style.cssText = 'width:480px;image-rendering:pixelated;margin:4px';
           document.getElementById('grid').before(vc);
+          // 紙らしさ（明るさ − 彩度）の地図と、大津の方法で分けた塊
+          const p2 = Detect._parts.halve(ctx.P, dw, dh);
+          let hist = new Uint32Array(256); for (const v of p2.map) hist[Math.max(0, Math.min(255, v | 0))]++;
+          const th = Imaging.otsu(hist, p2.map.length);
+          const mc = document.createElement('canvas'); mc.width = p2.w; mc.height = p2.h;
+          const mx = mc.getContext('2d'); const md = mx.createImageData(p2.w, p2.h);
+          for (let i = 0; i < p2.map.length; i++) { const v = Math.max(0, Math.min(255, p2.map[i])); md.data[i * 4] = p2.map[i] > th ? 255 : v * 0.4; md.data[i * 4 + 1] = v * 0.4; md.data[i * 4 + 2] = v * 0.4; md.data[i * 4 + 3] = 255; }
+          mx.putImageData(md, 0, 0);
+          mc.style.cssText = 'width:480px;image-rendering:pixelated;margin:4px';
+          document.getElementById('grid').before(mc);
         }
         row.voteTop = all.slice(0, 24).map((l) => `${l.t}°:${l.votes}`).join(' ');
       }
