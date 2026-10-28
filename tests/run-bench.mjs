@@ -74,6 +74,9 @@ async function runOne(query) {
   const target = await json(`/json/new?${encodeURIComponent('about:blank')}`, 'PUT');
   const page = connect(target.webSocketDebuggerUrl);
   await page.send('Runtime.enable');
+  // --throttle=4 で CPU を 4 分の 1 の速さにする（スマホの目安）
+  const thr = args.find((x) => x.startsWith('--throttle='));
+  if (thr) await page.send('Emulation.setCPUThrottlingRate', { rate: Number(thr.slice(11)) });
   await page.send('Page.navigate', { url: `${BASE}?${query}` });
   const t0 = Date.now();
   for (;;) {
