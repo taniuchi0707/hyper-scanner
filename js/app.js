@@ -424,6 +424,7 @@
     $('app').classList.add('under-camera');
     updateBars();
     updateCamThumb();
+    Engine.warm('live');
     camLoop(cam);
     animateOverlay();
   }

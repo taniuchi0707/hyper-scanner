@@ -205,6 +205,11 @@ WorkerMain(JobsModule(Geo, Imaging, Detect, Pdf), Detect, Imaging);
   return {
     available,
 
+    // 先にワーカーを起こしておく（撮影画面を開いたとき、最初の検出を待たせない）
+    warm(name) {
+      if (supported) available().then((ok) => { if (ok) call(name, 'ping', null).catch(() => {}); });
+    },
+
     async detectLive(bitmap, opts) {
       if (await available()) return call('live', 'detect', { bitmap, opts }, [bitmap]);
       const r = Detect.find(bitmap, opts);
