@@ -618,7 +618,7 @@
     const canvas = $('cam-overlay');
     const video = $('cam-video');
     const r = { width: canvas.clientWidth, height: canvas.clientHeight };
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(2, window.devicePixelRatio || 1); // 3 倍の画面でも 2 倍で描く（線の見え方は変わらず、描く画素は半分以下）
     const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
     const vw = video.videoWidth, vh = video.videoHeight;
     const s = vw && vh ? Math.min(r.width / vw, r.height / vh) : 0;
