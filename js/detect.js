@@ -146,6 +146,32 @@ function DetectModule(Geo, Imaging) {
     }
     return out;
   }
+  // 半径 1 のぼかしを 2 回かけたのと同じ（重み 1,2,3,2,1）。2 回に分けるより速い（画像の外は端の値と同じとみなす）
+  function blur2(src, w, h) {
+    if (w < 5 || h < 5) return boxBlur(boxBlur(src, w, h, 1), w, h, 1);
+    const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
+    const k = 1 / 9;
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        const a = src[o + (x > 1 ? x - 2 : 0)], b = src[o + (x > 0 ? x - 1 : 0)], c = src[o + x];
+        const d = src[o + (x < w - 1 ? x + 1 : w - 1)], e = src[o + (x < w - 2 ? x + 2 : w - 1)];
+        tmp[o + x] = (a + 2 * b + 3 * c + 2 * d + e) * k;
+      }
+      // 両端は 2 回ぼかしたときと同じ重みにそろえる
+      tmp[o] = (5 * src[o] + 3 * src[o + 1] + src[o + 2]) * k;
+      tmp[o + w - 1] = (5 * src[o + w - 1] + 3 * src[o + w - 2] + src[o + w - 3]) * k;
+    }
+    for (let y = 0; y < h; y++) {
+      const a = (y > 1 ? y - 2 : 0) * w, b = (y > 0 ? y - 1 : 0) * w, c = y * w;
+      const d = (y < h - 1 ? y + 1 : h - 1) * w, e = (y < h - 2 ? y + 2 : h - 1) * w;
+      if (y === 0) for (let x = 0; x < w; x++) out[x] = (5 * tmp[x] + 3 * tmp[w + x] + tmp[2 * w + x]) * k;
+      else if (y === h - 1) for (let x = 0; x < w; x++) out[c + x] = (5 * tmp[c + x] + 3 * tmp[c - w + x] + tmp[c - 2 * w + x]) * k;
+      else for (let x = 0; x < w; x++) out[c + x] = (tmp[a + x] + 2 * tmp[b + x] + 3 * tmp[c + x] + 2 * tmp[d + x] + tmp[e + x]) * k;
+    }
+    return out;
+  }
+
   // 縦横半分に縮める（2×2 の平均）。領域の切り出しは大まかな位置がわかればよいので、半分の大きさで行う
   function halve(src, w, h) {
     const w2 = w >> 1, h2 = h >> 1;
@@ -385,7 +411,7 @@ function DetectModule(Geo, Imaging) {
       sat[i] = mx - mn;
     }
     const r = Math.max(2, Math.round(Math.max(w, h) / 160));
-    const L = boxBlur(boxBlur(closing(lum, w, h, r), w, h, 1), w, h, 1);
+    const L = blur2(closing(lum, w, h, r), w, h);
     // 紙らしさ = 明るさ − 彩度。文字を消した明るさから、ぼかした彩度を引く（木の机や色の付いた背景と紙を分けやすい）
     const satB = boxBlur(sat, w, h, 1);
     const P = new Float32Array(n);
@@ -400,7 +426,7 @@ function DetectModule(Geo, Imaging) {
     if (chroma) {
       // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える。
       // chromaLite のときは閉じ処理を省いて軽くする（撮影中）
-      const C = chromaLite ? satB : boxBlur(boxBlur(closing(sat, w, h, r), w, h, 1), w, h, 1);
+      const C = chromaLite ? satB : blur2(closing(sat, w, h, r), w, h);
       const cg = sobel(C, w, h);
       for (let i = 0; i < n; i++) {
         const m = chroma * cg.mag[i];
@@ -1117,7 +1143,7 @@ function DetectModule(Geo, Imaging) {
   }
 
   // _parts は速さを測るとき用
-  return { find, detect, _parts: { makeContext, halve, regionQuads, regionRefine, boxBlur, closing, sobel, percentile, thinEdges, houghLines } };
+  return { find, detect, _parts: { makeContext, halve, blur2, regionQuads, regionRefine, boxBlur, closing, sobel, percentile, thinEdges, houghLines } };
 }
 
 const Detect = DetectModule(Geo, Imaging);
