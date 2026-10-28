@@ -986,25 +986,27 @@ function DetectModule(Geo, Imaging) {
   // （文字や写真に引っぱられないよう、平均ではなく真ん中の値で比べる）
   // 暗い机の上の濃い書類のために、中ほどが暗く、画面でいちばん明るいあたり（上位 1%、明るい文字など）より
   // ずっと暗いときも疑う（暗い部屋の白い書類は、中ほどが画面でいちばん明るいので当てはまらない）
+  // （撮影中は毎回呼ぶので、並べ替えではなく明るさの度数分布で求める）
   function darkDocument({ data, w, h }) {
-    const center = [], outer = [], all = [];
+    // 0.25 刻みの度数分布（並べ替えて求めた値とほぼ同じになる）
+    const center = new Uint32Array(1024), outer = new Uint32Array(1024), all = new Uint32Array(1024);
+    let cn = 0, on = 0, an = 0;
     const step = Math.max(1, Math.round(Math.max(w, h) / 120));
     for (let y = 0; y < h; y += step) {
       const ny = Math.abs(y / h - 0.5);
       for (let x = 0; x < w; x += step) {
         const nx = Math.abs(x / w - 0.5);
         const j = (y * w + x) * 4;
-        const l = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
-        all.push(l);
-        if (nx < 0.22 && ny < 0.22) center.push(l); else if (nx > 0.4 || ny > 0.4) outer.push(l);
+        const l = ((0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2]) * 4) | 0;
+        all[l]++; an++;
+        if (nx < 0.22 && ny < 0.22) { center[l]++; cn++; } else if (nx > 0.4 || ny > 0.4) { outer[l]++; on++; }
       }
     }
-    if (!center.length || !outer.length) return false;
-    const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
-    const c = med(center);
-    all.sort((p, q) => p - q);
-    const p99 = all[Math.floor(all.length * 0.99)];
-    return c < med(outer) - 50 || (c < 90 && c < p99 - 60);
+    if (!cn || !on) return false;
+    // 小さいほうから数えて k 番目（0 始まり）の値
+    const at = (hist, k) => { let acc = 0; for (let b = 0; b < 1024; b++) { acc += hist[b]; if (acc > k) return b / 4; } return 255; };
+    const c = at(center, cn >> 1);
+    return c < at(outer, on >> 1) - 50 || (c < 90 && c < at(all, Math.floor(an * 0.99)) - 60);
   }
 
   function invertPixels({ data, w, h }) {
