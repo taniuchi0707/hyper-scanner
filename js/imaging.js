@@ -261,23 +261,24 @@ function ImagingModule(Geo) {
 
   // 紙の明るさ（照明のむら）をブロックごとに見積もる。
   // ブロックの平均より明るい画素の平均を「紙の色」とみなすので、文字に引っ張られにくい。
-  function backgroundGrid(arr, stride, off, w, h, b, gw, gh) {
+  // 区画は大きい（長辺の 1/40）ので、画素は縦横 1 つおき（step）に見れば十分。4 分の 1 の手間で済む
+  function backgroundGrid(arr, stride, off, w, h, b, gw, gh, step = b >= 16 ? 2 : 1) {
     const size = gw * gh;
     const sum = new Float64Array(size), cnt = new Uint32Array(size);
     const col = new Uint16Array(w);
     for (let x = 0; x < w; x++) col[x] = (x / b) | 0;
-    for (let y = 0; y < h; y++) {
+    for (let y = 0; y < h; y += step) {
       const row = ((y / b) | 0) * gw;
       let idx = y * w * stride + off;
-      for (let x = 0; x < w; x++, idx += stride) { const k = row + col[x]; sum[k] += arr[idx]; cnt[k]++; }
+      for (let x = 0; x < w; x += step, idx += stride * step) { const k = row + col[x]; sum[k] += arr[idx]; cnt[k]++; }
     }
     const mean = new Float32Array(size);
     for (let k = 0; k < size; k++) mean[k] = cnt[k] ? sum[k] / cnt[k] : 255;
     sum.fill(0); cnt.fill(0);
-    for (let y = 0; y < h; y++) {
+    for (let y = 0; y < h; y += step) {
       const row = ((y / b) | 0) * gw;
       let idx = y * w * stride + off;
-      for (let x = 0; x < w; x++, idx += stride) {
+      for (let x = 0; x < w; x += step, idx += stride * step) {
         const k = row + col[x];
         const v = arr[idx];
         if (v >= mean[k]) { sum[k] += v; cnt[k]++; }
@@ -334,14 +335,22 @@ function ImagingModule(Geo) {
   function unsharp(arr, stride, w, h, amount, threshold = 4) {
     const src = new Uint8ClampedArray(arr);
     const row = w * stride;
+    const ch = Math.min(stride, 3);
+    // 横に並んだ 3 画素の和を先に求めておき、3×3 の和はその縦 3 行の和で出す（同じ結果で速い）
+    const hs = new Uint16Array(arr.length);
+    for (let y = 0; y < h; y++) {
+      const o = y * row;
+      for (let x = 1; x < w - 1; x++) {
+        const b = o + x * stride;
+        for (let c = 0; c < ch; c++) hs[b + c] = src[b + c - stride] + src[b + c] + src[b + c + stride];
+      }
+    }
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const base = y * row + x * stride;
-        for (let c = 0; c < Math.min(stride, 3); c++) {
+        for (let c = 0; c < ch; c++) {
           const k = base + c;
-          const mean = (src[k - row - stride] + src[k - row] + src[k - row + stride]
-            + src[k - stride] + src[k] + src[k + stride]
-            + src[k + row - stride] + src[k + row] + src[k + row + stride]) / 9;
+          const mean = (hs[k - row] + hs[k] + hs[k + row]) / 9;
           const diff = src[k] - mean;
           if (diff > threshold || diff < -threshold) arr[k] = src[k] + amount * diff;
         }
@@ -361,24 +370,27 @@ function ImagingModule(Geo) {
     const b = Math.max(8, Math.round(Math.max(w, h) / 40));
     const gw = Math.ceil(w / b), gh = Math.ceil(h / b);
     const tx = interpTable(w, b, gw), ty = interpTable(h, b, gh);
-    const sample = (g, x, y) => {
-      const r0 = ty.i0[y] * gw, r1 = ty.i1[y] * gw, fx = tx.f[x], fy = ty.f[y];
-      const a = g[r0 + tx.i0[x]] + (g[r0 + tx.i1[x]] - g[r0 + tx.i0[x]]) * fx;
-      const c = g[r1 + tx.i0[x]] + (g[r1 + tx.i1[x]] - g[r1 + tx.i0[x]]) * fx;
-      return a + (c - a) * fy;
-    };
+    // 格子の 2 行（r0, r1）の q 列目を、縦方向に fy で補間する
+    const rowLerp = (g, r0, r1, q, fy) => g[r0 + q] + (g[r1 + q] - g[r0 + q]) * fy;
 
     if (mode === 'enhance') {
       const gR = backgroundGrid(data, 4, 0, w, h, b, gw, gh);
       const gG = backgroundGrid(data, 4, 1, w, h, b, gw, gh);
       const gB = backgroundGrid(data, 4, 2, w, h, b, gw, gh);
       const lo = 40, hi = 236, k = 255 / (hi - lo), sat = 1.12;
+      // 背景の明るさは、行ごとに縦方向の補間を先に済ませておく
+      const rR = new Float64Array(gw), rG = new Float64Array(gw), rB = new Float64Array(gw);
       let j = 0;
       for (let y = 0; y < h; y++) {
+        const r0 = ty.i0[y] * gw, r1 = ty.i1[y] * gw, fy = ty.f[y];
+        for (let q = 0; q < gw; q++) {
+          rR[q] = rowLerp(gR, r0, r1, q, fy); rG[q] = rowLerp(gG, r0, r1, q, fy); rB[q] = rowLerp(gB, r0, r1, q, fy);
+        }
         for (let x = 0; x < w; x++, j += 4) {
-          let r = (data[j] * 255 / sample(gR, x, y) - lo) * k;
-          let g = (data[j + 1] * 255 / sample(gG, x, y) - lo) * k;
-          let bl = (data[j + 2] * 255 / sample(gB, x, y) - lo) * k;
+          const a = tx.i0[x], c = tx.i1[x], fx = tx.f[x];
+          let r = (data[j] * 255 / (rR[a] + (rR[c] - rR[a]) * fx) - lo) * k;
+          let g = (data[j + 1] * 255 / (rG[a] + (rG[c] - rG[a]) * fx) - lo) * k;
+          let bl = (data[j + 2] * 255 / (rB[a] + (rB[c] - rB[a]) * fx) - lo) * k;
           const l = 0.299 * r + 0.587 * g + 0.114 * bl;
           r = l + (r - l) * sat; g = l + (g - l) * sat; bl = l + (bl - l) * sat;
           data[j] = r; data[j + 1] = g; data[j + 2] = bl;
@@ -393,8 +405,13 @@ function ImagingModule(Geo) {
     for (let i = 0, j = 0; i < n; i++, j += 4) L[i] = (77 * data[j] + 150 * data[j + 1] + 29 * data[j + 2]) >> 8;
     const gL = backgroundGrid(L, 1, 0, w, h, b, gw, gh);
     const N = new Uint8ClampedArray(n);
+    const rL = new Float64Array(gw);
     let i = 0;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++, i++) N[i] = L[i] * 255 / sample(gL, x, y);
+    for (let y = 0; y < h; y++) {
+      const r0 = ty.i0[y] * gw, r1 = ty.i1[y] * gw, fy = ty.f[y];
+      for (let q = 0; q < gw; q++) rL[q] = rowLerp(gL, r0, r1, q, fy);
+      for (let x = 0; x < w; x++, i++) { const a = tx.i0[x], c = tx.i1[x]; N[i] = L[i] * 255 / (rL[a] + (rL[c] - rL[a]) * tx.f[x]); }
+    }
 
     unsharp(N, 1, w, h, mode === 'bw' ? 0.8 : 0.6);
 

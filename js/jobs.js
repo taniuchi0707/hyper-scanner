@@ -68,11 +68,22 @@ function JobsModule(Geo, Imaging, Detect, Pdf) {
   }
 
   // PDF に入れる 1 ページ分の画像（JPEG か、白黒なら 1 ビット）
-  async function render({ blob, page, maxLong, bitonal, quality }) {
+  async function render({ blob, page, maxLong, bitonal, quality, timing = false }) {
+    const t = timing ? {} : null;
+    let last = Date.now();
+    const mark = (k) => { if (t) { const now = Date.now(); t[k] = now - last; last = now; } };
     const img = await Imaging.decode(blob);
-    const canvas = Imaging.render(img, page, maxLong);
+    mark('decode');
+    const warped = Imaging.warpFrom(img, page.quad, maxLong, page.aspect || null);
     if (img.close) img.close();
-    return bitonal && Pdf.canDeflate ? Pdf.bitonalImage(canvas) : Pdf.jpegImage(canvas, quality);
+    mark('warp');
+    Imaging.applyFilter(warped, page.filter);
+    mark('filter');
+    const canvas = Imaging.rotatedCanvas(warped, page.rotation || 0);
+    const out = await (bitonal && Pdf.canDeflate ? Pdf.bitonalImage(canvas) : Pdf.jpegImage(canvas, quality));
+    mark('encode');
+    if (t) out.timing = t;
+    return out;
   }
 
   return { ingest, detectPage, preview, thumb, render };
