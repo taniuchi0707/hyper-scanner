@@ -1014,15 +1014,13 @@ function DetectModule(Geo, Imaging) {
     candidates.sort((a, b) => b.s - a.s);
 
     // 上位の候補は、辺を境目に合わせ直してから比べ直す
-    // （撮影中の quick では、上位 6 件を 1 回だけ合わせて軽くする）
+    // （撮影中の quick では、上位 6 件だけにして軽くする）
     const top = candidates.slice(0, doRefine ? (quick ? 6 : 8) : 1).map((c) => {
       if (!doRefine) return c;
       // 広めに探して大きなずれを直し、狭く探して細かく合わせる
       const wide = Math.max(4, Math.round(ctx.long / 60));
       const narrow = Math.max(3, Math.round(ctx.long / 120));
-      const rq = quick
-        ? Geo.orderQuad(refine(c.q, ctx, wide))
-        : Geo.orderQuad(refine(Geo.orderQuad(refine(c.q, ctx, wide)), ctx, narrow));
+      const rq = Geo.orderQuad(refine(Geo.orderQuad(refine(c.q, ctx, wide)), ctx, narrow));
       const rs = Geo.isConvex(rq) ? score(rq) : 0;
       // 合わせ直した位置のほうが正確なので、点数がほとんど落ちなければそちらを使う
       return rs >= c.s * 0.97 ? { q: rq, s: Math.max(rs, c.s), from: c.from, raw: c.q } : { ...c, raw: c.q };
