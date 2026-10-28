@@ -527,13 +527,13 @@
       const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
       const near = gtN.map(([x, y]) => [x + (tr() - 0.5) * 0.01, y + (tr() - 0.5) * 0.01]);
       const t0 = performance.now();
-      const a = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: near, track: true });
+      const a = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: near, track: true, exp });
       row.trackMs = performance.now() - t0;
       row.tracked = !!(a && a.tracked);
       row.trackErr = evaluate(a && a.quad, scene.gt, scene.W, scene.H).err;
       const ang = tr() * Math.PI * 2;
       const far = gtN.map(([x, y]) => [x + Math.cos(ang) * 0.1, y + Math.sin(ang) * 0.1]);
-      const f = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: far, track: true });
+      const f = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: far, track: true, exp });
       row.farTracked = !!(f && f.tracked);
       row.farErr = evaluate(f && f.quad, scene.gt, scene.W, scene.H).err;
     }
