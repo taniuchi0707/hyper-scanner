@@ -997,7 +997,9 @@ function DetectModule(Geo, Imaging) {
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
     // 角らしさは、2 本の辺の平均と弱いほうを半々に見る
     const cornerMix = 0.5;
-    const borderSup = 0.5; // 画面のふちを辺にするときの境目の強さ（はみ出した書類を、ふちまでの四角形として返す）
+    // 画面のふちを辺にするときの境目の強さ。上げると、はみ出した書類をふちまでの四角形として返しやすいが、
+    // 周りに置いたほかの書類（ふちにかかる）を選びやすくなるので、0.4 にとどめる
+    const borderSup = 0.4;
     const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup);
     const candidates = [];
     const add = (q, from) => {

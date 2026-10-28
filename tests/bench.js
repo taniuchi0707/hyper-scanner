@@ -130,6 +130,26 @@
 
     const bg = drawBackground(rnd, cfg.bg, W, H);
     const bx = bg.getContext('2d');
+    if (params.get('clutter')) {
+      // ?clutter=1: 机の上に、ほかの書類が 1〜3 枚、画面のふちにかかって置いてある
+      const cr2 = mulberry32(seed + 44);
+      const m = 1 + ((cr2() * 3) | 0);
+      for (let k = 0; k < m; k++) {
+        const side = (cr2() * 4) | 0;
+        const cxp = side === 0 ? -0.05 : side === 1 ? 1.05 : cr2();
+        const cyp = side === 2 ? -0.05 : side === 3 ? 1.05 : cr2();
+        bx.save();
+        bx.translate(cxp * W, cyp * H);
+        bx.rotate((cr2() - 0.5) * 1.2);
+        const pw = W * (0.35 + cr2() * 0.2), ph = pw * 1.414;
+        bx.fillStyle = 'rgba(0,0,0,.3)'; bx.filter = 'blur(10px)'; bx.fillRect(-pw / 2 + 6, -ph / 2 + 9, pw, ph); bx.filter = 'none';
+        bx.fillStyle = ['#f4f3ef', '#eef0f2', '#f6f1e2'][(cr2() * 3) | 0];
+        bx.fillRect(-pw / 2, -ph / 2, pw, ph);
+        bx.fillStyle = '#2a2d31'; bx.font = `${Math.round(pw / 30)}px sans-serif`;
+        for (let y = -ph / 2 + pw * 0.12; y < ph / 2 - pw * 0.1; y += pw / 22) bx.fillText('会議資料 予定表 請求明細 打合せ記録 配布資料', -pw / 2 + pw * 0.08, y);
+        bx.restore();
+      }
+    }
     if (cfg.under) {
       // 下に重なったもう1枚の紙（上の紙の影がこの上に落ちる）
       bx.fillStyle = '#ecebe6';
