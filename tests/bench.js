@@ -165,6 +165,17 @@
     q.forEach(([x, y], i) => (i ? bx.lineTo(x + 8, y + 12) : bx.moveTo(x + 8, y + 12)));
     bx.closePath(); bx.fill();
     bx.restore();
+    if (params.get('edge')) {
+      // ?edge=1: 紙の厚みでできる、ふちのすぐ外の薄い影（実際の紙は、白い紙の上に置いてもふちがうっすら見える）
+      bx.save();
+      bx.filter = 'blur(1.5px)';
+      bx.strokeStyle = 'rgba(0,0,0,.16)';
+      bx.lineWidth = 3;
+      bx.beginPath();
+      q.forEach(([x, y], i) => (i ? bx.lineTo(x, y) : bx.moveTo(x, y)));
+      bx.closePath(); bx.stroke();
+      bx.restore();
+    }
     if (cfg.pen) {
       bx.save(); bx.translate(q[1][0] + 30, q[1][1] + 200); bx.rotate(1.2); bx.fillStyle = '#16233a'; bx.fillRect(0, -9, 360, 18); bx.restore();
     }
