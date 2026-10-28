@@ -983,8 +983,10 @@ function DetectModule(Geo, Imaging) {
 
   // 画面の中ほど（書類があることが多い）が、まわりより明らかに暗ければ、地の色が濃い書類とみなす
   // （文字や写真に引っぱられないよう、平均ではなく真ん中の値で比べる）
+  // 暗い机の上の濃い書類のために、中ほどが暗く、画面でいちばん明るいあたり（上位 1%、明るい文字など）より
+  // ずっと暗いときも疑う（暗い部屋の白い書類は、中ほどが画面でいちばん明るいので当てはまらない）
   function darkDocument({ data, w, h }) {
-    const center = [], outer = [];
+    const center = [], outer = [], all = [];
     const step = Math.max(1, Math.round(Math.max(w, h) / 120));
     for (let y = 0; y < h; y += step) {
       const ny = Math.abs(y / h - 0.5);
@@ -992,12 +994,16 @@ function DetectModule(Geo, Imaging) {
         const nx = Math.abs(x / w - 0.5);
         const j = (y * w + x) * 4;
         const l = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
+        all.push(l);
         if (nx < 0.22 && ny < 0.22) center.push(l); else if (nx > 0.4 || ny > 0.4) outer.push(l);
       }
     }
     if (!center.length || !outer.length) return false;
     const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
-    return med(center) < med(outer) - 50;
+    const c = med(center);
+    all.sort((p, q) => p - q);
+    const p99 = all[Math.floor(all.length * 0.99)];
+    return c < med(outer) - 50 || (c < 90 && c < p99 - 60);
   }
 
   function invertPixels({ data, w, h }) {
