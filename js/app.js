@@ -161,6 +161,9 @@
   // ---------- 一覧 ----------
 
   function renderPages() {
+    // 撮影画面を開いている間は、裏に隠れた一覧を作り直さない（閉じたときにまとめて作る）
+    if (state.camera) { state.pagesDirty = true; return; }
+    state.pagesDirty = false;
     const frag = document.createDocumentFragment();
     state.pages.forEach((p, i) => {
       const li = document.createElement('li');
@@ -440,6 +443,7 @@
     state.camera = null;
     $('camera').hidden = true;
     $('app').classList.remove('under-camera');
+    if (state.pagesDirty) renderPages();
     updateBars();
     if (cam.added) toast(`${cam.added}ページを追加しました`);
   }
