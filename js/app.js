@@ -483,7 +483,8 @@
   async function camLoop(cam) {
     const video = $('cam-video');
     const useWorker = await Engine.available();
-    const direct = useWorker && typeof VideoFrame === 'function';
+    let direct = useWorker && typeof VideoFrame === 'function';
+    let directFails = 0;
     while (state.camera === cam) {
       // 撮影中（写真の処理でカメラが止まっている間）は調べない
       if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
@@ -494,8 +495,11 @@
       if (frame) {
         try {
           found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true });
+          directFails = 0;
         } catch (e) {
           found = null;
+          // VideoFrame をワーカーに渡せない環境では、映像のコマを縮めて渡す方法に切り替える
+          if (direct && ++directFails >= 2) direct = false;
         } finally {
           frame.close(); // ワーカーに渡したあとなら何もしない
         }
