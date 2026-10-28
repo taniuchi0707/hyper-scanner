@@ -41,11 +41,13 @@ function JobsModule(Geo, Imaging, Detect, Pdf) {
     if (!quad && hint && Math.abs(img.width / img.height - hint.ratio) < 0.02) quad = hint.quad;
     const detected = !!quad;
     if (!quad) quad = insetQuad();
+    // 地の色が濃い書類は「くっきり」（紙を白くする）が合わないので、「カラー」から始める
+    if (found && found.dark && filter === 'enhance') filter = 'color';
     const thumbCanvas = Imaging.render(mid, { quad, aspect, filter, rotation }, thumbLong);
     mark('thumb');
     const [original, thumb] = await Promise.all([img.blob, Imaging.toBlob(thumbCanvas, 'image/jpeg', 0.82)]);
     mark('encode');
-    return { original, width: img.width, height: img.height, quad, detected, thumb, score: found ? found.score : 0, timing: t };
+    return { original, width: img.width, height: img.height, quad, detected, thumb, filter, score: found ? found.score : 0, timing: t };
   }
 
   async function detectPage({ key, blob, opts }) {

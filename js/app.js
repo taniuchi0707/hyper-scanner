@@ -261,7 +261,7 @@
     if (replaceId) {
       const page = byId(replaceId);
       if (!page) return null;
-      Object.assign(page, { original: r.original, width: r.width, height: r.height, quad: r.quad, aspect, detected: r.detected, rotation: 0, rev: (page.rev || 0) + 1 });
+      Object.assign(page, { original: r.original, width: r.width, height: r.height, quad: r.quad, aspect, detected: r.detected, filter: r.filter || page.filter, rotation: 0, rev: (page.rev || 0) + 1 });
       setThumb(page, r.thumb);
       await Store.putPage(page);
       return page;
@@ -277,7 +277,7 @@
       quad: r.quad,
       aspect,
       detected: r.detected,
-      filter: 'enhance',
+      filter: r.filter || 'enhance',
       rotation: 0,
       sample,
       createdAt: Date.now(),

@@ -1030,7 +1030,9 @@ function DetectModule(Geo, Imaging) {
     if (invert === undefined && !exp.nodark && darkDocument(px)) {
       const a = find(source, { ...opts, invert: false });
       const b = find(source, { ...opts, invert: true });
-      return !a ? b : !b ? a : b.score > a.score ? b : a;
+      const r = !a ? b : !b ? a : b.score > a.score ? b : a;
+      if (r && r === b) r.dark = true; // 地の色が濃い書類（仕上げを「カラー」から始めるときの目印）
+      return r;
     }
     if (invert) px = invertPixels(px);
     // 色の境目も使う（撮影中は軽さを優先して、彩度の閉じ処理を省く）
