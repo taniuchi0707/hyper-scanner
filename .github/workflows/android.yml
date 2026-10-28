@@ -63,7 +63,9 @@ jobs:
           name: hyper-scanner-apk
           path: hyper-scanner.apk
 
+      # 署名鍵が登録されていないときは、組み立ての確認だけにする（毎回違う鍵だと上書き更新できないため）
       - name: リリースに載せる
+        if: env.HS_KEYSTORE_FILE != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
