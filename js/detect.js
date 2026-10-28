@@ -373,7 +373,7 @@ function DetectModule(Geo, Imaging) {
 
   // ---------- 点数づけ ----------
 
-  function makeContext({ data: px, w, h }, chroma = 0) {
+  function makeContext({ data: px, w, h }, chroma = 0, chromaLite = false) {
     const n = w * h;
     const lum = new Float32Array(n);
     const sat = new Float32Array(n);
@@ -392,8 +392,9 @@ function DetectModule(Geo, Imaging) {
     for (let i = 0; i < n; i++) P[i] = L[i] - 0.6 * satB[i];
     const { gx, gy, mag } = sobel(L, w, h);
     if (chroma) {
-      // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える
-      const C = boxBlur(boxBlur(closing(sat, w, h, r), w, h, 1), w, h, 1);
+      // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える。
+      // chromaLite のときは閉じ処理を省いて軽くする（撮影中）
+      const C = chromaLite ? satB : boxBlur(boxBlur(closing(sat, w, h, r), w, h, 1), w, h, 1);
       const cg = sobel(C, w, h);
       for (let i = 0; i < n; i++) {
         const m = chroma * cg.mag[i];
@@ -941,8 +942,8 @@ function DetectModule(Geo, Imaging) {
     const px = pixelsOf(source, long);
     if (!px) return null;
     mark('pixels');
-    // 写真から探すときは、色の境目も使う（撮影中は軽さを優先して明るさだけ）
-    const ctx = makeContext(px, quick ? 0 : 1);
+    // 色の境目も使う（撮影中は軽さを優先して、彩度の閉じ処理を省く）
+    const ctx = makeContext(px, 1, quick);
     mark('prepare');
     const { w, h, gx, gy, mag, gscale } = ctx;
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
