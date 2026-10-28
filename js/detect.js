@@ -520,14 +520,15 @@ function DetectModule(Geo, Imaging) {
   }
 
   // 撮影中は、直前に見つけた位置の近くを少しだけ選びやすくする（枠のぶれを抑える）
-  function priorFactor(q, prior, long) {
+  // gain: 撮影中は 0.2。撮った写真では、撮影画面の枠が違っていたときに引っぱられないよう弱める
+  function priorFactor(q, prior, long, gain = 0.2) {
     if (!prior) return 1;
     let d = 0;
     for (let i = 0; i < 4; i++) d = Math.max(d, Math.hypot(q[i][0] - prior[i][0], q[i][1] - prior[i][1]));
-    return 1 + 0.2 * Math.exp(-((d / long / 0.04) ** 2));
+    return 1 + gain * Math.exp(-((d / long / 0.04) ** 2));
   }
 
-  function makeScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0) {
+  function makeScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0, priorGain = 0.2) {
     const { w, h, gscale } = ctx;
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
@@ -653,7 +654,7 @@ function DetectModule(Geo, Imaging) {
       const corner = cornerFactor(sides, cornerMix);
       s *= corner;
       s *= aspectFactor(q, w, h, aspect);
-      s *= priorFactor(q, prior, ctx.long);
+      s *= priorFactor(q, prior, ctx.long, priorGain);
       s *= centerFactor(cx, cy, w, h, center);
       if (explain) {
         const r2 = (v) => Math.round(v * 100) / 100;
@@ -739,7 +740,7 @@ function DetectModule(Geo, Imaging) {
 
   // 4 本の直線（a1, a2 が向かい合い、b1, b2 が向かい合う）の四角形を、累積和だけで採点する。
   // 内側の均一さは見ないので、上位の候補だけを makeScorer で採点し直す
-  function makeFastScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0) {
+  function makeFastScorer(ctx, aspect, prior, cornerMix = 0, borderSup = 0.4, center = 0, priorGain = 0.2) {
     const { w, h } = ctx;
     const seg = { sup: 0, valid: false, plus: 0, minus: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
     const sides = [null, null, null, null];
@@ -796,7 +797,7 @@ function DetectModule(Geo, Imaging) {
       s *= centerFactor(cx, cy, w, h, center);
       if (aspect || prior) {
         const oq = Geo.orderQuad(pts);
-        s *= aspectFactor(oq, w, h, aspect) * priorFactor(oq, prior, ctx.long);
+        s *= aspectFactor(oq, w, h, aspect) * priorFactor(oq, prior, ctx.long, priorGain);
       }
       return s;
     };
@@ -1052,7 +1053,8 @@ function DetectModule(Geo, Imaging) {
     // 周りに置いたほかの書類（ふちにかかる）を選びやすくなるので、0.4 にとどめる
     const borderSup = 0.4;
     const center = 0.25; // 画面の中ほどを選びやすくする強さ（四隅の近くで最大 25% 下げる）
-    const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup, center);
+    const priorGain = quick ? 0.2 : 0.08; // 撮った写真では、撮影画面の枠に引っぱられすぎないよう弱める
+    const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup, center, priorGain);
 
     // 追いかけ: 撮影中に書類を見つけ続けているときは、直前の位置だけを合わせ直して確かめる（画面全体は探さない）。
     // 点が十分に高ければそれを返し、低ければふつうに探す
@@ -1117,7 +1119,7 @@ function DetectModule(Geo, Imaging) {
         pairs.push([lines[i], lines[j]]);
       }
     }
-    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix, borderSup, center);
+    const fast = makeFastScorer(ctx, aspect, priorPx, cornerMix, borderSup, center, priorGain);
     const KEEP = 24;
     const shortlist = []; // { s, a1, a2, b1, b2 }（点の高い順に KEEP 件）
     let tried = 0;

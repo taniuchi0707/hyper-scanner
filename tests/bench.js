@@ -424,7 +424,9 @@
       const pr = mulberry32(cfg.seed + 9);
       const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
       const ang = pr() * Math.PI * 2;
-      priorOpt = params.get('prior') === 'far'
+      priorOpt = params.get('prior') === 'live'
+        ? (() => { const r = Detect.find(source, { long: 384, aspect: aspectOpt, quick: true }); return r && r.score >= 0.45 ? r.quad : null; })()
+        : params.get('prior') === 'far'
         ? gtN.map(([x, y]) => [x + Math.cos(ang) * 0.1, y + Math.sin(ang) * 0.1])
         : gtN.map(([x, y]) => [x + (pr() - 0.5) * 0.01, y + (pr() - 0.5) * 0.01]);
     }
