@@ -524,7 +524,8 @@
       cam.spent = cam.spent ? cam.spent * 0.8 + spent * 0.2 : spent;
       if (!cam.slow && cam.spent > 140) cam.slow = true;
       else if (cam.slow && cam.spent < 70) cam.slow = false;
-      const gap = cam.stableSince ? LIVE_GAP * 2 : LIVE_GAP;
+      // 撮った写真を取り込んでいる間も倍にする（取り込みのワーカーと CPU を取り合って、映像がカクつかないように）
+      const gap = LIVE_GAP * (cam.stableSince ? 2 : 1) * (state.pending > 0 ? 2 : 1);
       await sleep(useWorker ? Math.max(gap - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
     }
   }
