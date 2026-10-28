@@ -410,6 +410,8 @@
               const w = Math.min(pc.imageWidth.max, 4096);
               cam.photoSize = { w, h: Math.round((w * pc.imageHeight.max) / pc.imageWidth.max) };
             }
+            // フラッシュは使わない（書類に白い照り返しが出る。光を測るための予備の発光も待たずに済む）
+            cam.flashOff = !!(pc && Array.isArray(pc.fillLightMode) && pc.fillLightMode.includes('off'));
             updateCamRes();
           })
           .catch(() => {});
@@ -686,7 +688,8 @@
     let photo = null;
     if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
       try {
-        const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : undefined;
+        const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : {};
+        if (cam.flashOff) settings.fillLightMode = 'off';
         photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
       } catch (e) {
         cam.photoFailed = true; // 次からは待たずに、撮る瞬間だけ大きくした映像で撮る
