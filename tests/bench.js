@@ -156,6 +156,9 @@
     const d = img.data;
     const Hm = Geo.homography(q, [[0, 0], [dw, 0], [dw, dh], [0, dh]]);
     const lg = [Math.cos(cfg.lightDir), Math.sin(cfg.lightDir)];
+    // ?real=1 のとき、約 3 割の紙は反っている（辺が弓なりになる。四隅の位置は変わらない）
+    const cr = mulberry32(seed + 55);
+    const curl = params.get('real') && cr() < 0.3 ? { ax: (cr() - 0.5) * 0.06, ay: (cr() - 0.5) * 0.06 } : null;
     const sh = cfg.shadow;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -166,7 +169,13 @@
           const sx = (x / W - sh.x) / sh.r, sy = (y / H - sh.y) / sh.r;
           light *= 1 - sh.k * Math.exp(-(sx * sx + sy * sy));
         }
-        const [u, v] = Geo.project(Hm, x + 0.5, y + 0.5);
+        let [u, v] = Geo.project(Hm, x + 0.5, y + 0.5);
+        if (curl) {
+          // 紙の座標を中ほどだけ伸び縮みさせて、辺を弓なりにする
+          const su = 1 + curl.ax * Math.sin((Math.PI * v) / dh), sv = 1 + curl.ay * Math.sin((Math.PI * u) / dw);
+          u = (u - dw / 2) * su + dw / 2;
+          v = (v - dh / 2) * sv + dh / 2;
+        }
         if (u >= 0 && v >= 0 && u < dw && v < dh) {
           const k = (((v | 0) * dw) + (u | 0)) << 2;
           d[j] = dd[k]; d[j + 1] = dd[k + 1]; d[j + 2] = dd[k + 2];

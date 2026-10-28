@@ -817,8 +817,10 @@ function DetectModule(Geo, Imaging) {
 
   // 各辺の近く（法線方向に ±r 画素）で勾配がいちばん強い位置を集め、直線を当てはめ直す。
   // grad: 勾配の大きさを返す関数 / absMin: 境目とみなす勾配の下限 / maxShift: 角が動いてよい距離
-  function refineWith(q, grad, r, absMin, maxShift) {
-    const lines = [];
+  // local > 0 のときは、各辺の両端から local の範囲の点だけでも直線を当てはめ、角はその端の直線どうしで決める
+  // （反った紙は辺が弓なりなので、辺全体の直線より角の近くの直線のほうが角の位置に合う）
+  function refineWith(q, grad, r, absMin, maxShift, local = 0, localMin = 0) {
+    const lines = [], ends = [];
     for (let i = 0; i < 4; i++) {
       const P = q[i], Q = q[(i + 1) % 4];
       const dx = Q[0] - P[0], dy = Q[1] - P[1];
@@ -843,7 +845,7 @@ function DetectModule(Geo, Imaging) {
           const den = vals[j - 1] - 2 * vals[j] + vals[j + 1];
           if (den < 0) off = Math.max(-0.5, Math.min(0.5, (0.5 * (vals[j - 1] - vals[j + 1])) / den));
         }
-        found.push([x0 + (bd + off) * nx, y0 + (bd + off) * ny, best]);
+        found.push([x0 + (bd + off) * nx, y0 + (bd + off) * ny, best, t]);
       }
       // その辺の強い点（上位 2 割の強さの 35% 以上）だけで当てはめる
       const strengths = found.map((p) => p[2]).sort((a, b) => a - b);
@@ -856,10 +858,26 @@ function DetectModule(Geo, Imaging) {
         // 元の辺から 4° 以上傾くなら、ほかの線に引っぱられたとみなして使わない
         if (Math.abs(fit.c * nx + fit.s * ny) > 0.9975) line = fit;
       }
-      lines.push(line || { c: nx, s: ny, rho: nx * P[0] + ny * P[1] });
+      line = line || { c: nx, s: ny, rho: nx * P[0] + ny * P[1] };
+      lines.push(line);
+      if (local) {
+        // 端の近くの直線。点が足りないとき（指で隠れているなど）や、傾きすぎるときは辺全体の直線を使う
+        const endLine = (sel) => {
+          const sub = pts.filter(sel);
+          if (sub.length < Math.max(6, n * local * 0.4)) return line;
+          const fit = fitLine(sub);
+          return Math.abs(fit.c * nx + fit.s * ny) > 0.99 ? fit : line;
+        };
+        ends.push({ a: endLine((p) => p[3] < 0.08 + local), b: endLine((p) => p[3] > 0.92 - local) });
+      }
     }
     return q.map((p, i) => {
-      const c = intersect(lines[(i + 3) % 4], lines[i]);
+      let c = intersect(lines[(i + 3) % 4], lines[i]);
+      if (local) {
+        // 辺がまっすぐなら、点の多い辺全体の直線のほうが正確。端の直線で角が 0.15% 以上動くとき（弓なり）だけ使う
+        const e = intersect(ends[(i + 3) % 4].b, ends[i].a);
+        if (e && (!c || Geo.dist(e, c) > localMin)) c = e;
+      }
       return c && Geo.dist(c, p) < maxShift ? c : p;
     });
   }
@@ -929,7 +947,7 @@ function DetectModule(Geo, Imaging) {
 
   // 高い解像度（long）の画像で、辺の位置をもう一度細かく合わせる（写真から探すとき）。
   // 文字の線に引っぱられないよう、辺とほぼ同じ向きの境目だけを使う
-  function refineFine(source, quadN, long) {
+  function refineFine(source, quadN, long, localFrac = 0) {
     const px = pixelsOf(source, long);
     if (!px) return null;
     const { data, w, h } = px;
@@ -949,7 +967,7 @@ function DetectModule(Geo, Imaging) {
     const L = Math.max(w, h);
     let q = quadN.map(([x, y]) => [x * w, y * h]);
     q = Geo.orderQuad(refineWith(q, grad, Math.max(4, Math.round(L / 160)), 24, 0.015 * L));
-    q = Geo.orderQuad(refineWith(q, grad, Math.max(2, Math.round(L / 480)), 24, 0.015 * L));
+    q = Geo.orderQuad(refineWith(q, grad, Math.max(2, Math.round(L / 480)), 24, 0.015 * L, localFrac, 0.0015 * L));
     if (!Geo.isConvex(q)) return null;
     return q.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]);
   }
@@ -1106,7 +1124,8 @@ function DetectModule(Geo, Imaging) {
     const norm = (q) => q.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]);
     mark('refine');
     let quad = norm(best.q);
-    if (refineLong > long) quad = refineFine(source, quad, refineLong) || quad;
+    // 最後の合わせ直しでは、反った紙のために角の近くの直線も見る（辺の両端 30%）
+    if (refineLong > long) quad = refineFine(source, quad, refineLong, 0.3) || quad;
     mark('fine');
     const result = { quad, score: best.s };
     if (debug) {
