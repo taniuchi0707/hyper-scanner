@@ -1,5 +1,5 @@
 // 四角形・射影変換まわりの計算
-const Geo = (() => {
+function GeoModule() {
   'use strict';
 
   // 部分ピボット付きのガウスの消去法で A x = b を解く
@@ -214,4 +214,6 @@ const Geo = (() => {
   }
 
   return { solve, homography, project, dist, area, orderQuad, isConvex, angles, quadSize, convexHull, hullToQuad, estimateAspect, outputAspect };
-})();
+}
+
+const Geo = GeoModule();

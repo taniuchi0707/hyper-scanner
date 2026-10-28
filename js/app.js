@@ -48,7 +48,8 @@
   const PREVIEW_LONG = 1600;
   const CORNER_NAMES = ['左上の角', '右上の角', '右下の角', '左下の角'];
   const DETECT_LONG = 480;
-  const LIVE_LONG = 256;
+  const REFINE_LONG = 1600; // 写真から探すときは、最後にこの解像度で辺を合わせ直す
+  const LIVE_LONG = 320; // 撮影中の検出の解像度（ワーカーで動くので、前より細かくできる）
 
   // 書類の形（長辺 / 短辺）。選ぶと、その比の四角形を見つけやすくなり、仕上がりもその比にそろう
   const SHAPES = {
@@ -220,28 +221,41 @@
     return run;
   }
 
-  async function refreshThumb(page, source) {
-    const canvas = Imaging.render(source, page, THUMB_LONG);
-    page.thumb = await Imaging.toBlob(canvas, 'image/jpeg', 0.82);
+  // ワーカーが元画像を使い回すための目印（撮り直すと変わる）
+  const pageKey = (page) => `${page.id}:${page.rev || 0}`;
+  const pageLook = (page) => ({ quad: page.quad, aspect: page.aspect || null, filter: page.filter, rotation: page.rotation || 0 });
+
+  function setThumb(page, blob) {
+    page.thumb = blob;
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
-    page.thumbUrl = URL.createObjectURL(page.thumb);
+    page.thumbUrl = URL.createObjectURL(blob);
   }
 
-  // hint: 撮影画面で見つけていた四隅（同じ縦横比の写真のときだけ、見つからなかった場合の代わりに使う）
-  async function addImage(blob, { sample = false, replaceId = null, hint = null } = {}) {
-    const img = await Imaging.normalize(blob, ORIGINAL_MAX);
+  async function refreshThumb(page) {
+    setThumb(page, await Engine.thumb({ key: pageKey(page), blob: page.original, page: pageLook(page), long: THUMB_LONG }));
+  }
+
+  /**
+   * 写真をページにする。重い処理（縮小・四隅の検出・サムネイル）はワーカーで行う
+   * source: Blob（写真）か ImageBitmap（映像の1コマ）
+   * ref: 写真の向きをそろえる手本（映像の1コマを縮めたもの）
+   * hint: 撮影画面で見つけていた四隅（同じ縦横比の写真のときだけ、見つからなかった場合の代わりに使う）
+   */
+  async function addImage(source, { sample = false, replaceId = null, hint = null, ref = null } = {}) {
     const aspect = sample ? Math.SQRT2 : shapeAspect();
-    const result = Detect.find(img.canvas, { long: DETECT_LONG, aspect });
-    let found = result && result.quad;
-    if (!found && hint && Math.abs(img.width / img.height - hint.ratio) < 0.02) found = hint.quad;
-    const quad = found || insetQuad();
+    const target = replaceId ? byId(replaceId) : null;
+    const r = await Engine.ingest({
+      source, ref, hint, aspect,
+      maxLong: ORIGINAL_MAX, detectLong: DETECT_LONG, refineLong: REFINE_LONG, thumbLong: THUMB_LONG,
+      filter: target ? target.filter : 'enhance', rotation: 0,
+    });
     state.pdf = null;
 
     if (replaceId) {
       const page = byId(replaceId);
       if (!page) return null;
-      Object.assign(page, { original: img.blob, width: img.width, height: img.height, quad, aspect, detected: !!found, rotation: 0 });
-      await refreshThumb(page, img.canvas);
+      Object.assign(page, { original: r.original, width: r.width, height: r.height, quad: r.quad, aspect, detected: r.detected, rotation: 0, rev: (page.rev || 0) + 1 });
+      setThumb(page, r.thumb);
       await Store.putPage(page);
       return page;
     }
@@ -250,18 +264,18 @@
     const page = {
       id: uid(),
       order: state.pages.length,
-      original: img.blob,
-      width: img.width,
-      height: img.height,
-      quad,
+      original: r.original,
+      width: r.width,
+      height: r.height,
+      quad: r.quad,
       aspect,
-      detected: !!found,
+      detected: r.detected,
       filter: 'enhance',
       rotation: 0,
       sample,
       createdAt: Date.now(),
     };
-    await refreshThumb(page, img.canvas);
+    setThumb(page, r.thumb);
     state.pages.push(page);
     renumber();
     await Store.putPage(page);
@@ -300,8 +314,8 @@
     });
   }
 
-  async function replaceFrom(blob, id, hint = null) {
-    const page = await enqueue(() => addImage(blob, { replaceId: id, hint }), false);
+  async function replaceFrom(source, id, hint = null, ref = null) {
+    const page = await enqueue(() => addImage(source, { replaceId: id, hint, ref }), false);
     if (page) openEditor(page.id, 'crop');
   }
 
@@ -360,7 +374,7 @@
     const track = stream.getVideoTracks()[0];
     state.camera = {
       stream, track, replaceId,
-      quad: null, score: 0, lastSeen: 0, timer: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
+      quad: null, display: null, score: 0, lastSeen: 0, raf: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
       stableSince: 0, autoLock: null,
     };
     video.srcObject = stream;
@@ -376,10 +390,14 @@
     if (typeof ImageCapture === 'function') {
       try {
         cam.imageCapture = new ImageCapture(track);
-        // 写真として撮れるいちばん大きなサイズ（動画の1コマよりずっと細かい）
+        // 写真として撮るサイズ。動画の1コマよりずっと細かいが、5000 万画素などの巨大な写真は
+        // 読み込むだけで重いので、保存する大きさ（長辺 3200）に余裕を持たせた長辺 4096 までにする
         cam.imageCapture.getPhotoCapabilities()
           .then((pc) => {
-            if (pc && pc.imageWidth && pc.imageWidth.max) cam.photoSize = { w: pc.imageWidth.max, h: pc.imageHeight.max };
+            if (pc && pc.imageWidth && pc.imageWidth.max) {
+              const w = Math.min(pc.imageWidth.max, 4096);
+              cam.photoSize = { w, h: Math.round((w * pc.imageHeight.max) / pc.imageWidth.max) };
+            }
             updateCamRes();
           })
           .catch(() => {});
@@ -395,13 +413,14 @@
     $('camera').hidden = false;
     updateBars();
     updateCamThumb();
-    camLoop();
+    camLoop(cam);
+    animateOverlay();
   }
 
   function closeCamera() {
     const cam = state.camera;
     if (!cam) return;
-    clearTimeout(cam.timer);
+    cancelAnimationFrame(cam.raf);
     cam.stream.getTracks().forEach((t) => t.stop());
     $('cam-video').srcObject = null;
     state.camera = null;
@@ -416,53 +435,100 @@
     $('cam-shutter').style.setProperty('--p', String(Math.max(0, Math.min(1, p))));
   }
 
-  // 書類の検出を続け、枠を描く。自動撮影がオンなら、枠が止まってから少し待ってシャッターを切る
-  function camLoop() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // 映像の1コマを、長辺 long の大きさに縮めて取り出す（縮めるのは端末の画像処理に任せる）
+  async function grabFrame(video, long) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const s = Math.min(1, long / Math.max(vw, vh));
+    const w = Math.max(1, Math.round(vw * s)), h = Math.max(1, Math.round(vh * s));
+    try {
+      return s < 1
+        ? await createImageBitmap(video, { resizeWidth: w, resizeHeight: h, resizeQuality: 'medium' })
+        : await createImageBitmap(video);
+    } catch (e) {
+      const c = Imaging.makeCanvas(w, h);
+      c.getContext('2d').drawImage(video, 0, 0, w, h);
+      try { return await createImageBitmap(c); } catch (e2) { return null; }
+    }
+  }
+
+  // 書類の検出を続ける。検出はワーカーで行うので、映像や操作は止まらない。
+  // 自動撮影がオンなら、枠が止まってから少し待ってシャッターを切る
+  async function camLoop(cam) {
+    const video = $('cam-video');
+    const useWorker = await Engine.available();
+    while (state.camera === cam) {
+      if (document.hidden || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
+      const started = performance.now();
+      const frame = await grabFrame(video, LIVE_LONG);
+      let found = null;
+      if (frame) {
+        try {
+          found = await Engine.detectLive(frame, { long: LIVE_LONG, aspect: shapeAspect(), prior: cam.quad, quick: true });
+        } catch (e) {
+          found = null;
+        }
+      }
+      if (state.camera !== cam) return;
+      onDetected(cam, found);
+      // ワーカーなら続けてすぐ次を調べる。画面側で調べるときは、かかった時間に合わせて間をあける
+      const spent = performance.now() - started;
+      await sleep(useWorker ? 30 : Math.max(120, spent * 2));
+    }
+  }
+
+  function onDetected(cam, found) {
+    const now = performance.now();
+    if (found && found.score >= 0.35) {
+      const q = found.quad;
+      const prev = cam.quad;
+      const moved = prev ? quadMove(prev, q) : 1;
+      // 枠の描画でもなめらかにするので、ここでは軽くならすだけにする
+      cam.quad = prev && moved < 0.08 ? prev.map((p, i) => [p[0] * 0.4 + q[i][0] * 0.6, p[1] * 0.4 + q[i][1] * 0.6]) : q;
+      cam.score = found.score;
+      cam.lastSeen = now;
+      if (moved < 0.015 && found.score >= 0.6) {
+        if (!cam.stableSince) cam.stableSince = now;
+      } else {
+        cam.stableSince = 0;
+      }
+      // 撮ったあとは、書類を動かすか入れ替えるまで次の自動撮影をしない
+      if (cam.autoLock && quadMove(cam.autoLock, cam.quad) > 0.1) cam.autoLock = null;
+    } else if (now - cam.lastSeen > 900) {
+      cam.quad = null;
+      cam.stableSince = 0;
+      cam.autoLock = null;
+    }
+
+    const AUTO_WAIT = 1100;
+    if (state.settings.autoCapture && cam.quad && cam.stableSince && !cam.autoLock && !cam.busy) {
+      const p = (now - cam.stableSince) / AUTO_WAIT;
+      setShutterProgress(p);
+      if (p >= 1) {
+        cam.autoLock = cam.quad.map((pt) => pt.slice());
+        cam.stableSince = 0;
+        setShutterProgress(0);
+        capture();
+      }
+    } else {
+      setShutterProgress(0);
+    }
+  }
+
+  // 枠は画面の書き換えごとに、検出した位置へなめらかに近づけて描く（検出の回数より滑らかに見える）
+  function animateOverlay() {
     const cam = state.camera;
     if (!cam) return;
-    const video = $('cam-video');
-    const started = performance.now();
-    if (video.readyState >= 2 && video.videoWidth) {
-      const found = Detect.find(video, { long: LIVE_LONG, aspect: shapeAspect() });
-      const now = performance.now();
-      if (found && found.score >= 0.35) {
-        const q = found.quad;
-        const prev = cam.quad;
-        const moved = prev ? quadMove(prev, q) : 1;
-        cam.quad = prev && moved < 0.08 ? prev.map((p, i) => [p[0] * 0.55 + q[i][0] * 0.45, p[1] * 0.55 + q[i][1] * 0.45]) : q;
-        cam.score = found.score;
-        cam.lastSeen = now;
-        if (moved < 0.015 && found.score >= 0.6) {
-          if (!cam.stableSince) cam.stableSince = now;
-        } else {
-          cam.stableSince = 0;
-        }
-        // 撮ったあとは、書類を動かすか入れ替えるまで次の自動撮影をしない
-        if (cam.autoLock && quadMove(cam.autoLock, cam.quad) > 0.1) cam.autoLock = null;
-      } else if (now - cam.lastSeen > 900) {
-        cam.quad = null;
-        cam.stableSince = 0;
-        cam.autoLock = null;
-      }
-
-      const AUTO_WAIT = 1100;
-      if (state.settings.autoCapture && cam.quad && cam.stableSince && !cam.autoLock && !cam.busy) {
-        const p = (now - cam.stableSince) / AUTO_WAIT;
-        setShutterProgress(p);
-        if (p >= 1) {
-          cam.autoLock = cam.quad.map((pt) => pt.slice());
-          cam.stableSince = 0;
-          setShutterProgress(0);
-          capture();
-        }
-      } else {
-        setShutterProgress(0);
-      }
-      drawCamOverlay();
+    if (cam.quad) {
+      cam.display = cam.display
+        ? cam.display.map((p, i) => [p[0] + (cam.quad[i][0] - p[0]) * 0.35, p[1] + (cam.quad[i][1] - p[1]) * 0.35])
+        : cam.quad.map((p) => p.slice());
+    } else {
+      cam.display = null;
     }
-    // 検出にかかった時間に合わせて間隔をあける（遅い端末で重くならないように）
-    const spent = performance.now() - started;
-    cam.timer = setTimeout(camLoop, Math.max(120, spent * 2));
+    drawCamOverlay();
+    cam.raf = requestAnimationFrame(animateOverlay);
   }
 
   function setCamHint(text, found) {
@@ -477,7 +543,7 @@
     const cam = state.camera;
     const canvas = $('cam-overlay');
     const video = $('cam-video');
-    const r = canvas.getBoundingClientRect();
+    const r = { width: canvas.clientWidth, height: canvas.clientHeight };
     const dpr = window.devicePixelRatio || 1;
     const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
     if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
@@ -489,8 +555,8 @@
     const s = Math.min(r.width / vw, r.height / vh);
     const dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
 
-    if (cam.quad) {
-      const pts = cam.quad.map(([x, y]) => [ox + x * dw, oy + y * dh]);
+    if (cam.display) {
+      const pts = cam.display.map(([x, y]) => [ox + x * dw, oy + y * dh]);
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.closePath();
@@ -531,35 +597,36 @@
     void flash.offsetWidth;
     flash.classList.add('on');
 
-    // まず映像の1コマを確保し、撮影 API が使えればより高解像度の写真に差し替える
-    const frame = Imaging.makeCanvas(video.videoWidth, video.videoHeight);
-    frame.getContext('2d').drawImage(video, 0, 0);
+    // まず映像の1コマを確保し、撮影 API が使えればより高解像度の写真に差し替える。
+    // 縮小・向きの補正・四隅の検出などの重い処理は、ワーカーにまとめて任せる
     const hint = cam.quad ? { quad: cam.quad.map((p) => p.slice()), ratio: video.videoWidth / video.videoHeight } : null;
-    let blob = null;
+    const frame = await grabFrame(video, Infinity);
+    let source = frame, ref = null;
     if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
       try {
         const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : undefined;
         const photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
-        // 端末によっては写真が横倒しで返るので、映像の向きに合わせて回す
-        blob = await Imaging.alignTo(photo, frame);
+        // 端末によっては写真が横倒しで返るので、映像の向きを手本にしてワーカーで回す
+        ref = frame ? await createImageBitmap(frame, { resizeWidth: 160, resizeHeight: Math.max(1, Math.round((160 * frame.height) / frame.width)) }) : null;
+        if (frame) frame.close();
+        source = photo;
       } catch (e) {
-        blob = null;
         cam.photoFailed = true; // 次からは待たずに映像の1コマを使う
         updateCamRes();
       }
     }
-    if (!blob) blob = await Imaging.toBlob(frame, 'image/jpeg', 0.95);
     cam.busy = false;
     if (state.camera === cam) $('cam-shutter').disabled = false;
+    if (!source) { toast('撮影できませんでした。もう一度押してください'); return; }
 
     if (cam.replaceId) {
       cam.added = 0;
       closeCamera();
-      replaceFrom(blob, cam.replaceId, hint);
+      replaceFrom(source, cam.replaceId, hint, ref);
       return;
     }
     cam.added++;
-    enqueue(() => addImage(blob, { hint }));
+    enqueue(() => addImage(source, { hint, ref }));
     updateCamThumb();
   }
 
@@ -646,14 +713,14 @@
     state.editor = {
       id,
       bmp,
+      key: pageKey(page),
+      blob: page.original,
       quad: page.quad.map((p) => p.slice()),
       filter: page.filter,
       rotation: page.rotation || 0,
       aspect: page.aspect || null,
       detected: page.detected !== false,
       mode,
-      warped: null,
-      warpKey: '',
       drag: null,
       token: 0,
       view: null,
@@ -881,22 +948,25 @@
     const token = ++ed.token;
     const stale = () => state.editor !== ed || ed.token !== token || ed.mode !== 'finish';
     showEdBusy(true);
-    await nextFrame();
-    if (stale()) return;
-    const key = JSON.stringify(ed.quad);
-    if (ed.warpKey !== key) {
-      ed.warped = Imaging.warpFrom(ed.bmp, ed.quad, PREVIEW_LONG, ed.aspect);
-      ed.warpKey = key;
+    // 補正とフィルターはワーカーで作る（四隅が同じなら、補正はワーカーが使い回す）
+    let out;
+    try {
+      out = await Engine.preview({
+        key: ed.key, blob: ed.blob, quad: ed.quad, aspect: ed.aspect,
+        filter: ed.filter, rotation: ed.rotation, maxLong: PREVIEW_LONG,
+      });
+    } catch (err) {
+      if (!stale()) { showEdBusy(false); toast('仕上がりを作れませんでした'); }
+      return;
     }
-    const img = Imaging.applyFilter(Imaging.clone(ed.warped), ed.filter);
-    const out = Imaging.rotatedCanvas(img, ed.rotation);
-    if (stale()) return;
+    if (stale()) { out.close(); return; }
     showEdBusy(false);
     const c = $('ed-canvas');
     c.width = out.width;
     c.height = out.height;
     c.getContext('2d').drawImage(out, 0, 0);
     place(c, fitRect(out.width, out.height));
+    out.close();
     $('ed-info').textContent = FILTER_HINT[ed.filter] || '';
   }
 
@@ -936,7 +1006,7 @@
       showEdBusy(true);
       await nextFrame();
       Object.assign(page, { quad: ed.quad, filter: ed.filter, rotation: ed.rotation, detected: true });
-      await refreshThumb(page, ed.bmp);
+      await refreshThumb(page);
       await Store.putPage(page);
       state.pdf = null;
     }
@@ -1061,15 +1131,10 @@
       const out = [];
       for (let i = 0; i < n; i++) {
         exportProgress(i, n, `${i + 1} / ${n} ページを補正しています`);
-        await nextFrame();
         const p = pages[i];
-        const bmp = await Imaging.decode(p.original);
-        const canvas = Imaging.render(bmp, p, maxLong);
-        if (typeof bmp.close === 'function') bmp.close();
-        const img = p.filter === 'bw' && Pdf.canDeflate ? await Pdf.bitonalImage(canvas) : await Pdf.jpegImage(canvas, Q.jpeg);
+        // 補正・フィルター・画像の圧縮はワーカーで行う（画面は固まらない）
+        const img = await Engine.render({ blob: p.original, page: pageLook(p), maxLong, bitonal: p.filter === 'bw', quality: Q.jpeg });
         out.push({ ...img, ...Pdf.layout(img.width, img.height, size) });
-        canvas.width = 0;
-        canvas.height = 0;
       }
       exportProgress(n, n, 'PDF を組み立てています');
       const blob = Pdf.build(out, { title: state.title });
@@ -1141,7 +1206,7 @@
         let bin = '';
         for (let j = 0; j < part.length; j += 0x8000) bin += String.fromCharCode.apply(null, part.subarray(j, j + 0x8000));
         if (!native.appendChunk(btoa(bin))) return 'error';
-        await nextFrame();
+        await sleep(0); // 画面が裏に回っても止まらないよう、描画ではなくタイマーで区切る
       }
       return native.finishFile(name, action);
     } catch (err) {
@@ -1337,9 +1402,18 @@
     $('ed-done').addEventListener('click', commitEditor);
     $('ed-tab-crop').addEventListener('click', () => state.editor && setEditorMode('crop'));
     $('ed-tab-finish').addEventListener('click', () => state.editor && setEditorMode('finish'));
-    $('ed-auto').addEventListener('click', () => {
+    $('ed-auto').addEventListener('click', async () => {
       const ed = state.editor;
-      const found = ed && Detect.find(ed.bmp, { long: DETECT_LONG, aspect: ed.aspect });
+      if (!ed) return;
+      showEdBusy(true);
+      let found = null;
+      try {
+        found = await Engine.detectPage({ key: ed.key, blob: ed.blob, opts: { long: DETECT_LONG, aspect: ed.aspect, refineLong: REFINE_LONG } });
+      } catch (e) {
+        found = null;
+      }
+      if (state.editor !== ed) return;
+      showEdBusy(false);
       if (!found) { toast('書類の四隅を見つけられませんでした。角の丸を指で合わせてください'); return; }
       ed.quad = found.quad;
       drawQuad();
@@ -1459,9 +1533,7 @@
     renderPages();
 
     pages.filter((p) => !p.thumbUrl).forEach((p) => enqueue(async () => {
-      const bmp = await Imaging.decode(p.original);
-      await refreshThumb(p, bmp);
-      if (typeof bmp.close === 'function') bmp.close();
+      await refreshThumb(p);
       await Store.putPage(p);
     }, false));
 

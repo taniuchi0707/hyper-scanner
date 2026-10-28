@@ -256,8 +256,13 @@
     let t0 = performance.now();
     const v1 = evaluate(typeof DetectV1 !== 'undefined' ? DetectV1.detect(scene.bmp, long) : null, scene.gt, scene.W, scene.H);
     const t1 = performance.now() - t0;
+    const aspectOpt = params.get('aspect') ? Number(params.get('aspect')) : null;
     t0 = performance.now();
-    const found = Detect.find(scene.bmp, { long, aspect: params.get('aspect') ? Number(params.get('aspect')) : null, debug: !!only });
+    const prevFound = typeof DetectV2 !== 'undefined' ? DetectV2.find(scene.bmp, { long, aspect: aspectOpt }) : null;
+    const tp = performance.now() - t0;
+    const prev = evaluate(prevFound && prevFound.quad, scene.gt, scene.W, scene.H);
+    t0 = performance.now();
+    const found = Detect.find(scene.bmp, { long, aspect: aspectOpt, refineLong: Number(params.get('refine')) || 0, debug: !!only });
     const t2 = performance.now() - t0;
     const v2 = evaluate(found && found.quad, scene.gt, scene.W, scene.H);
     // 縦横比の見積もり: 正解の四隅から求めた幅/高さと、本当の 1/aspect を比べる（素朴な辺の長さの比とも比べる）
@@ -266,7 +271,7 @@
     const out = Geo.outputAspect(scene.gt, scene.W, scene.H, null);
     const sz = Geo.quadSize(scene.gt);
     const row = {
-      name: cfg.name, bg: cfg.bg, kind: cfg.kind, inside, v1: v1.err, v2: v2.err, score: found ? found.score : 0, t1, t2,
+      name: cfg.name, bg: cfg.bg, kind: cfg.kind, inside, v1: v1.err, prev: prev.err, v2: v2.err, score: found ? found.score : 0, t1, tp, t2,
       aspZhang: est ? Math.abs(est / trueRatio - 1) : 1,
       aspOut: Math.abs(out / trueRatio - 1),
       aspNaive: Math.abs(sz.w / sz.h / trueRatio - 1),
@@ -305,7 +310,8 @@
   const summary = {
     scenes: valid.length,
     v1: { ok15: rate('v1', 0.015), ok08: rate('v1', 0.008), median: median(valid.map((r) => r.v1)), ms: median(valid.map((r) => r.t1)) },
-    v2: { ok15: rate('v2', 0.015), ok08: rate('v2', 0.008), median: median(valid.map((r) => r.v2)), ms: median(valid.map((r) => r.t2)) },
+    prev: { ok15: rate('prev', 0.015), ok08: rate('prev', 0.008), ok03: rate('prev', 0.003), median: median(valid.map((r) => r.prev)), ms: median(valid.map((r) => r.tp)) },
+    v2: { ok15: rate('v2', 0.015), ok08: rate('v2', 0.008), ok03: rate('v2', 0.003), median: median(valid.map((r) => r.v2)), ms: median(valid.map((r) => r.t2)) },
     aspect: {
       naiveMedian: median(rows.map((r) => r.aspNaive)),
       naiveWithin3: rows.filter((r) => r.aspNaive < 0.03).length / rows.length,

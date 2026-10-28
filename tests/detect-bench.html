@@ -15,13 +15,14 @@
 </head>
 <body>
 <h1>四隅検出ベンチマーク</h1>
-<p class="legend"><span style="color:#22c55e">■ 正解</span><span style="color:#f97316">■ 旧方式</span><span style="color:#06b6d4">■ 新方式</span>
-  ずれは長辺に対する割合。?long=480 で検出時の解像度、?aspect=1.414 で縦横比の指定、?only=#01,#02 で場面を絞れます。</p>
+<p class="legend"><span style="color:#22c55e">■ 正解</span><span style="color:#f97316">■ 旧方式</span><span style="color:#a855f7">（前の版は数値のみ）</span><span style="color:#06b6d4">■ 新方式</span>
+  ずれは長辺に対する割合。?long=480 で検出時の解像度、?aspect=1.414 で縦横比の指定、?only=#01,#02 で場面を絞り、?refine=1600 で高解像度の仕上げ合わせを試せます。</p>
 <p id="status">準備中…</p>
 <div id="grid"></div>
 <script src="../js/geometry.js"></script>
 <script src="../js/imaging.js"></script>
 <script src="legacy-detect.js"></script>
+<script src="legacy-detect2.js"></script>
 <script src="../js/detect.js"></script>
 <script src="bench.js"></script>
 </body>

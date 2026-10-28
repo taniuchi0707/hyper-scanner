@@ -1,5 +1,5 @@
 // 画像だけでできた PDF を組み立てる（外部ライブラリなし）
-const Pdf = (() => {
+function PdfModule(Imaging) {
   'use strict';
 
   const te = new TextEncoder();
@@ -120,4 +120,6 @@ const Pdf = (() => {
   }
 
   return { SIZES, layout, canDeflate, jpegImage, bitonalImage, build };
-})();
+}
+
+const Pdf = PdfModule(Imaging);

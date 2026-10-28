@@ -1,23 +1,31 @@
-// 画像の読み込み・射影補正・仕上げフィルター
-const Imaging = (() => {
+// 画像の読み込み・射影補正・仕上げフィルター。
+// 画面（メインスレッド）と、重い処理を受け持つ Web Worker の両方で動くよう、DOM がなくても使える形にしてある
+function ImagingModule(Geo) {
   'use strict';
 
+  const hasDOM = typeof document !== 'undefined';
+
   function makeCanvas(w, h) {
-    const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(w));
-    c.height = Math.max(1, Math.round(h));
-    return c;
+    const W = Math.max(1, Math.round(w)), H = Math.max(1, Math.round(h));
+    if (hasDOM) {
+      const c = document.createElement('canvas');
+      c.width = W;
+      c.height = H;
+      return c;
+    }
+    return new OffscreenCanvas(W, H);
   }
 
   const ctx2d = (c) => c.getContext('2d', { willReadFrequently: true });
 
   function toBlob(canvas, type = 'image/jpeg', quality = 0.9) {
+    if (typeof canvas.convertToBlob === 'function') return canvas.convertToBlob({ type, quality });
     return new Promise((resolve, reject) => {
       canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('画像を書き出せませんでした'))), type, quality);
     });
   }
 
-  // <img> で読む。EXIF の向きはブラウザが反映してくれる
+  // <img> で読む（画面側だけ）。EXIF の向きはブラウザが反映してくれる
   function loadImage(blob) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(blob);
@@ -28,18 +36,94 @@ const Imaging = (() => {
     });
   }
 
-  // 保存済みの JPEG（向きは補正済み）を描画できる形にする
-  async function decode(blob) {
-    if (typeof createImageBitmap === 'function') {
-      try { return await createImageBitmap(blob); } catch (e) { /* <img> で読み直す */ }
+  // JPEG の EXIF にある向き（1〜8）。ないときは 1
+  function exifOrientation(buf) {
+    const v = new DataView(buf);
+    if (v.byteLength < 4 || v.getUint16(0) !== 0xffd8) return 1;
+    let off = 2;
+    while (off + 4 <= v.byteLength) {
+      const marker = v.getUint16(off);
+      if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) break;
+      const size = v.getUint16(off + 2);
+      if (marker === 0xffe1 && off + 18 <= v.byteLength && v.getUint32(off + 4) === 0x45786966) {
+        const tiff = off + 10;
+        const le = v.getUint16(tiff) === 0x4949;
+        const ifd = tiff + v.getUint32(tiff + 4, le);
+        if (ifd + 2 > v.byteLength) return 1;
+        const count = v.getUint16(ifd, le);
+        for (let i = 0; i < count; i++) {
+          const e = ifd + 2 + i * 12;
+          if (e + 12 > v.byteLength) break;
+          if (v.getUint16(e, le) === 0x0112) return v.getUint16(e + 8, le) || 1;
+        }
+        return 1;
+      }
+      off += 2 + size;
     }
-    return loadImage(blob);
+    return 1;
+  }
+
+  // JPEG に記録された本来の幅と高さ（向きを直す前）
+  function jpegSize(buf) {
+    const v = new DataView(buf);
+    if (v.byteLength < 4 || v.getUint16(0) !== 0xffd8) return null;
+    let off = 2;
+    while (off + 9 <= v.byteLength) {
+      const marker = v.getUint16(off);
+      if ((marker & 0xff00) !== 0xff00) return null;
+      const m = marker & 0xff;
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+        return { h: v.getUint16(off + 5), w: v.getUint16(off + 7) };
+      }
+      off += 2 + v.getUint16(off + 2);
+    }
+    return null;
   }
 
   const sizeOf = (src) => ({
     w: src.naturalWidth || src.videoWidth || src.width,
     h: src.naturalHeight || src.videoHeight || src.height,
   });
+
+  // EXIF の向き 5〜8（縦横が入れ替わる向き）に回して描く
+  function orient(img, o) {
+    const { w, h } = sizeOf(img);
+    const c = makeCanvas(h, w);
+    const x = c.getContext('2d');
+    if (o === 5) x.setTransform(0, 1, 1, 0, 0, 0);
+    else if (o === 6) x.setTransform(0, 1, -1, 0, h, 0);
+    else if (o === 7) x.setTransform(0, -1, -1, 0, h, w);
+    else x.setTransform(0, -1, 1, 0, 0, w);
+    x.drawImage(img, 0, 0);
+    return c;
+  }
+
+  // 画像を描画できる形にする。写真の向き（EXIF）が反映されていない環境では、自分で回す
+  async function decode(blob) {
+    if (typeof createImageBitmap === 'function') {
+      let bmp = null;
+      try {
+        bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      } catch (e) {
+        try { bmp = await createImageBitmap(blob); } catch (e2) { bmp = null; }
+      }
+      if (bmp) {
+        if (!blob.type || blob.type === 'image/jpeg') {
+          const buf = await blob.slice(0, 256 * 1024).arrayBuffer();
+          const o = exifOrientation(buf);
+          const raw = o >= 5 ? jpegSize(buf) : null;
+          if (raw && raw.w === bmp.width && raw.h === bmp.height && raw.w !== raw.h) {
+            const c = orient(bmp, o);
+            bmp.close();
+            return c;
+          }
+        }
+        return bmp;
+      }
+    }
+    if (hasDOM) return loadImage(blob);
+    throw new Error('この画像は読み込めませんでした');
+  }
 
   // 大きく縮めるときは半分ずつ縮めて、ギザギザを抑える
   function scaleTo(src, w, h) {
@@ -59,13 +143,18 @@ const Imaging = (() => {
     return out;
   }
 
-  // 撮影・取り込んだ画像を、向きをそろえた上限サイズの JPEG にする
-  async function normalize(file, maxLong = 2600) {
-    const img = await loadImage(file);
+  // 撮影・取り込んだ画像を、向きをそろえた上限サイズの JPEG にする。
+  // source は Blob（写真）か、映像の1コマ（ImageBitmap など）。ref があれば、その向きに回してそろえる
+  async function normalize(source, maxLong = 3200, ref = null) {
+    const decoded = typeof Blob !== 'undefined' && source instanceof Blob
+      ? (hasDOM ? await loadImage(source) : await decode(source))
+      : source;
+    const img = ref ? alignTo(decoded, ref) : decoded;
     const { w, h } = sizeOf(img);
     const s = Math.min(1, maxLong / Math.max(w, h));
     const canvas = scaleTo(img, Math.round(w * s), Math.round(h * s));
-    const blob = await toBlob(canvas, 'image/jpeg', 0.9);
+    if (decoded.close) decoded.close();
+    const blob = await toBlob(canvas, 'image/jpeg', 0.92);
     return { blob, canvas, width: canvas.width, height: canvas.height };
   }
 
@@ -322,12 +411,15 @@ const Imaging = (() => {
     return out;
   }
 
-  // 撮った写真（blob）を、画面に映っていた向き（ref: 映像の1コマ）にそろえる。
+  // 撮った写真（img）を、画面に映っていた向き（ref: 映像の1コマ）にそろえる。回したときは新しいキャンバスを返す。
   // 端末によっては写真が横倒しで返るため、0・90・180・270 度に回した縮小画像を映像と比べ、いちばん似ている向きを選ぶ
-  async function alignTo(photoBlob, ref) {
-    const img = await loadImage(photoBlob);
+  function alignTo(img, ref) {
     const { w, h } = sizeOf(img);
     const { w: fw, h: fh } = sizeOf(ref);
+    // 比べるのは小さな画像なので、大きな写真は先に一度だけ縮めておく
+    const k = Math.min(1, 256 / Math.max(w, h));
+    const small = k < 1 ? scaleTo(img, Math.round(w * k), Math.round(h * k)) : img;
+    const sw0 = Math.round(w * k), sh0 = Math.round(h * k);
     const S = 48;
     const fr = fw / fh;
     const thumb = (src, sw, sh, rot) => {
@@ -353,19 +445,19 @@ const Imaging = (() => {
     const base = thumb(ref, fw, fh, 0);
     let best = 0, bestErr = Infinity;
     for (const rot of [0, 90, 180, 270]) {
-      const t = thumb(img, w, h, rot);
+      const t = thumb(small, k < 1 ? sw0 : w, k < 1 ? sh0 : h, rot);
       let err = 0;
       for (let i = 0; i < t.length; i++) err += Math.abs(t[i] - base[i]);
       if (err < bestErr) { bestErr = err; best = rot; }
     }
-    if (!best) return photoBlob;
+    if (!best) return img;
     const swap = best % 180 !== 0;
     const out = makeCanvas(swap ? h : w, swap ? w : h);
     const ctx = out.getContext('2d');
     ctx.translate(out.width / 2, out.height / 2);
     ctx.rotate((best * Math.PI) / 180);
     ctx.drawImage(img, -w / 2, -h / 2);
-    return toBlob(out, 'image/jpeg', 0.94);
+    return out;
   }
 
   // 1ページ分の仕上がり画像を作る
@@ -376,4 +468,6 @@ const Imaging = (() => {
   }
 
   return { makeCanvas, toBlob, loadImage, decode, sizeOf, scaleTo, normalize, warp, outputSize, warpFrom, clone, otsu, applyFilter, rotatedCanvas, alignTo, render };
-})();
+}
+
+const Imaging = ImagingModule(Geo);
