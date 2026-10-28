@@ -418,7 +418,17 @@
     // ?exp=a,b で、検出の試験中の切り替え（exp.a = true）を渡す
     const exp = Object.fromEntries((params.get('exp') || '').split(',').filter(Boolean).map((k) => [k, true]));
     const timing = params.get('timing') ? {} : null;
-    const found = Detect.find(source, { long, aspect: aspectOpt, quick, exp, timing, refineLong: Number(params.get('refine')) || 0, debug: !!only });
+    // ?prior=near / far: 撮影画面の枠（直前の位置）として、正解の近く（±0.5%）か、10% ずれた位置を渡す
+    let priorOpt = null;
+    if (params.get('prior')) {
+      const pr = mulberry32(cfg.seed + 9);
+      const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
+      const ang = pr() * Math.PI * 2;
+      priorOpt = params.get('prior') === 'far'
+        ? gtN.map(([x, y]) => [x + Math.cos(ang) * 0.1, y + Math.sin(ang) * 0.1])
+        : gtN.map(([x, y]) => [x + (pr() - 0.5) * 0.01, y + (pr() - 0.5) * 0.01]);
+    }
+    const found = Detect.find(source, { long, aspect: aspectOpt, quick, exp, timing, prior: priorOpt, refineLong: Number(params.get('refine')) || 0, debug: !!only });
     const t2 = performance.now() - t0;
     if (frame) frame.close();
     const v2 = evaluate(found && found.quad, scene.gt, scene.W, scene.H);

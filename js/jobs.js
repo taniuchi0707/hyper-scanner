@@ -35,10 +35,13 @@ function JobsModule(Geo, Imaging, Detect, Pdf) {
     const k = Math.min(1, refineLong / Math.max(img.width, img.height));
     const mid = k < 1 ? Imaging.scaleTo(img.canvas, Math.round(img.width * k), Math.round(img.height * k)) : img.canvas;
     mark('normalize');
-    const found = Detect.find(mid, { long: detectLong, aspect, refineLong });
+    // 撮影画面で枠を出していた位置（映像と写真の縦横比が同じとき）を、写真でも選びやすくする。
+    // 周りにほかの書類があっても、画面で囲んでいた書類が仕上がりになるように
+    const sameView = hint && Math.abs(img.width / img.height - hint.ratio) < 0.02;
+    const found = Detect.find(mid, { long: detectLong, aspect, refineLong, prior: sameView ? hint.quad : null });
     mark('detect');
     let quad = found && found.quad;
-    if (!quad && hint && Math.abs(img.width / img.height - hint.ratio) < 0.02) quad = hint.quad;
+    if (!quad && sameView) quad = hint.quad;
     const detected = !!quad;
     if (!quad) quad = insetQuad();
     // 地の色が濃い書類は「くっきり」（紙を白くする）が合わないので、「カラー」から始める
