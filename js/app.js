@@ -418,7 +418,16 @@
       }
     }
     video.addEventListener('loadedmetadata', updateCamRes, { once: true });
-    video.onresize = updateCamRes; // 撮る瞬間だけ映像を大きくしたあとも、表示を今の大きさに合わせる
+    video.onresize = () => {
+      // 撮る瞬間だけ映像を大きくしたあとも、表示を今の大きさに合わせる
+      updateCamRes();
+      // 端末を回して縦横が入れ替わったら、前の向きで見つけた枠は捨てて探し直す
+      const landscape = video.videoWidth > video.videoHeight;
+      if (cam.landscape !== undefined && cam.landscape !== landscape) {
+        cam.quad = null; cam.display = null; cam.jump = null; cam.stableSince = 0;
+      }
+      cam.landscape = landscape;
+    };
     $('cam-gallery').hidden = !!replaceId;
     $('cam-shutter').disabled = false;
     $('cam-shutter').classList.remove('busy');
