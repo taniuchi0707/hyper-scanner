@@ -14,9 +14,9 @@ function build(W, H) {
   x.fillStyle = '#5b4636'; x.fillRect(0, 0, W, H);
   const k = W / 4096;
   x.translate(W / 2, H / 2); x.scale(k, k); x.rotate(-0.06);
-  x.fillStyle = '#f5f3ee'; x.fillRect(-1050, -1450, 2100, 2900);
+  x.fillStyle = '#f5f3ee'; x.fillRect(-900, -1250, 1800, 2500);
   x.fillStyle = '#20242a'; x.font = '64px sans-serif';
-  for (let i = 0; i < 30; i++) x.fillText('見積書 請求書 納品書 領収書 契約書 申込書 報告書', -950, -1250 + i * 90);
+  for (let i = 0; i < 26; i++) x.fillText('見積書 請求書 納品書 領収書 契約書 申込書', -800, -1080 + i * 90);
   const d = x.getImageData(0, 0, W, H).data;
   const out = new Uint8Array(W * H * 3 / 2);
   for (let i = 0, p = 0; i < W * H; i++, p += 4) out[i] = (16 + (65.481 * d[p] + 128.553 * d[p + 1] + 24.966 * d[p + 2]) / 255) | 0;

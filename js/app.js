@@ -515,6 +515,14 @@
 
   function onDetected(cam, found) {
     const now = performance.now();
+    if (found && found.score >= 0.35 && cam.quad && quadMove(cam.quad, found.quad) >= 0.08 && now - cam.lastSeen < 900) {
+      // 別の場所へ大きく飛んだときは、続けて同じあたりに見つかるまで前の枠を残す（枠が行き来してちらつかないように）
+      const same = cam.jump && quadMove(cam.jump, found.quad) < 0.05;
+      cam.jump = found.quad;
+      if (!same) { found = null; cam.stableSince = 0; }
+    } else {
+      cam.jump = null;
+    }
     if (found && found.score >= 0.35) {
       const q = found.quad;
       const prev = cam.quad;
