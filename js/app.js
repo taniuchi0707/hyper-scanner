@@ -49,7 +49,8 @@
   const CORNER_NAMES = ['左上の角', '右上の角', '右下の角', '左下の角'];
   const DETECT_LONG = 480;
   const REFINE_LONG = 1600; // 写真から探すときは、最後にこの解像度で辺を合わせ直す
-  const LIVE_LONG = 320; // 撮影中の検出の解像度（ワーカーで動くので、前より細かくできる）
+  // 撮影中の検出の解像度。ふだんは 384、1 回の検出に時間がかかる端末では 320 に下げる（ワーカーで動くので画面は止まらない）
+  const LIVE_LONG = 384, LIVE_LONG_SLOW = 320;
   const LIVE_GAP = 80; // 撮影中の検出は 1 秒に約 12 回まで。端末が熱で遅くならないようにする（枠は描画側でなめらかに動かす）
   const PREVIEW_SIZE = { w: 1920, h: 1440 }; // 撮影画面の映像の大きさ
   const LARGE_SIZE = { w: 4096, h: 3072 }; // 写真として撮れない端末で、撮る瞬間だけ頼む映像の大きさ
@@ -469,11 +470,11 @@
 
   // 撮影中の検出に渡す映像のコマ。VideoFrame は今のコマを指すだけで複製しないので、画面側はほぼ止まらない
   // （縮めるのはワーカーの中）。createImageBitmap で縮めると、元の大きさのまま色に直す処理が画面側で走って重い
-  function liveFrame(video, direct) {
+  function liveFrame(video, direct, long) {
     if (direct) {
       try { return new VideoFrame(video); } catch (e) { /* 下で取り出す */ }
     }
-    return grabFrame(video, LIVE_LONG);
+    return grabFrame(video, long);
   }
 
   // 書類の検出を続ける。検出はワーカーで行うので、映像や操作は止まらない。
@@ -486,11 +487,12 @@
       // 撮影中（写真の処理でカメラが止まっている間）は調べない
       if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
       const started = performance.now();
-      const frame = await liveFrame(video, direct);
+      const long = cam.slow ? LIVE_LONG_SLOW : LIVE_LONG;
+      const frame = await liveFrame(video, direct, long);
       let found = null;
       if (frame) {
         try {
-          found = await Engine.detectLive(frame, { long: LIVE_LONG, aspect: shapeAspect(), prior: cam.quad, quick: true });
+          found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true });
         } catch (e) {
           found = null;
         } finally {
@@ -502,6 +504,10 @@
       // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする。
       // 枠が止まっている間は間隔を倍にする（構えて待つ間の電池と発熱を抑える）
       const spent = performance.now() - started;
+      // かかった時間をならして見て、遅い端末では解像度を下げる（速くなれば戻す）
+      cam.spent = cam.spent ? cam.spent * 0.8 + spent * 0.2 : spent;
+      if (!cam.slow && cam.spent > 140) cam.slow = true;
+      else if (cam.slow && cam.spent < 70) cam.slow = false;
       const gap = cam.stableSince ? LIVE_GAP * 2 : LIVE_GAP;
       await sleep(useWorker ? Math.max(gap - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
     }
