@@ -50,10 +50,14 @@ public class MainActivity extends Activity {
     private static final String START_URL = "https://" + HOST + "/assets/www/index.html";
     private static final int REQ_FILES = 10;
     private static final int REQ_CAMERA = 11;
+    private static final int REQ_PHOTO = 12;
+    private static final int REQ_CAMERA_FOR_PHOTO = 13;
 
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
+    private File photoFile;
+    private Uri photoUri;
 
     private final List<Uri> shared = new ArrayList<>();
     private boolean sharedPending = false;
@@ -114,23 +118,17 @@ public class MainActivity extends Activity {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
                 boolean multiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
-                Intent pick;
-                if (Build.VERSION.SDK_INT >= 33) {
-                    pick = new Intent(MediaStore.ACTION_PICK_IMAGES);
-                    if (multiple) pick.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit());
-                } else {
-                    pick = new Intent(Intent.ACTION_GET_CONTENT);
-                    pick.addCategory(Intent.CATEGORY_OPENABLE);
-                    pick.setType("image/*");
-                    pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
-                }
-                try {
-                    startActivityForResult(pick, REQ_FILES);
+                // 撮影ボタン（capture 付き）は端末のカメラアプリで、写真の追加は写真の選択画面で
+                if (params.isCaptureEnabled() && getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+                    if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                        launchCameraApp();
+                    } else {
+                        requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA_FOR_PHOTO);
+                    }
                     return true;
-                } catch (ActivityNotFoundException e) {
-                    fileCallback = null;
-                    return false;
                 }
+                launchPicker(multiple);
+                return true;
             }
         });
 
@@ -201,6 +199,12 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == REQ_CAMERA_FOR_PHOTO) {
+            // カメラが許可されなければ、写真の選択画面にする
+            if (granted) launchCameraApp(); else launchPicker(false);
+            return;
+        }
         if (requestCode != REQ_CAMERA || pendingPermission == null) return;
         if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
             pendingPermission.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
@@ -210,10 +214,60 @@ public class MainActivity extends Activity {
         pendingPermission = null;
     }
 
-    // ---------- 写真の選択 ----------
+    // ---------- 写真の選択・撮影 ----------
+
+    private void launchPicker(boolean multiple) {
+        Intent pick;
+        if (Build.VERSION.SDK_INT >= 33) {
+            pick = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            if (multiple) pick.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit());
+        } else {
+            pick = new Intent(Intent.ACTION_GET_CONTENT);
+            pick.addCategory(Intent.CATEGORY_OPENABLE);
+            pick.setType("image/*");
+            pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+        }
+        try {
+            startActivityForResult(pick, REQ_FILES);
+        } catch (ActivityNotFoundException e) {
+            deliverFiles(null);
+        }
+    }
+
+    // 端末のカメラアプリで、最高画質の写真を撮ってもらう
+    private void launchCameraApp() {
+        try {
+            File dir = new File(getCacheDir(), "camera");
+            if (!dir.exists() && !dir.mkdirs()) throw new IOException("撮影用のフォルダを作れませんでした");
+            File[] old = dir.listFiles();
+            if (old != null) {
+                //noinspection ResultOfMethodCallIgnored
+                for (File f : old) f.delete();
+            }
+            photoFile = new File(dir, "photo-" + System.currentTimeMillis() + ".jpg");
+            photoUri = FileProvider.getUriForFile(this, getPackageName() + ".files", photoFile);
+            Intent shoot = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            shoot.putExtra(MediaStore.EXTRA_OUTPUT, photoUri);
+            shoot.setClipData(ClipData.newRawUri("photo", photoUri));
+            shoot.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(shoot, REQ_PHOTO);
+        } catch (IOException | ActivityNotFoundException | IllegalArgumentException e) {
+            launchPicker(false);
+        }
+    }
+
+    private void deliverFiles(Uri[] uris) {
+        if (fileCallback != null) fileCallback.onReceiveValue(uris);
+        fileCallback = null;
+    }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_PHOTO) {
+            boolean ok = resultCode == RESULT_OK && photoFile != null && photoFile.length() > 0;
+            deliverFiles(ok ? new Uri[]{photoUri} : null);
+            return;
+        }
         if (requestCode != REQ_FILES) {
             super.onActivityResult(requestCode, resultCode, data);
             return;
@@ -228,8 +282,7 @@ public class MainActivity extends Activity {
                 uris = new Uri[]{data.getData()};
             }
         }
-        if (fileCallback != null) fileCallback.onReceiveValue(uris);
-        fileCallback = null;
+        deliverFiles(uris);
     }
 
     // ---------- 共有で受け取った写真 ----------

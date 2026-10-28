@@ -237,7 +237,13 @@
   const params = new URLSearchParams(location.search);
   const long = Number(params.get('long')) || 480;
   const only = params.get('only');
-  const list = configs().filter((c) => !only || only.split(',').includes(c.name));
+  // ?fill=0.7-0.92 で、書類が画面に占める割合を変える（スマホでは画面いっぱいに撮ることが多い）
+  const fillRange = (params.get('fill') || '').split('-').map(Number);
+  const list = configs()
+    .filter((c) => !only || only.split(',').includes(c.name))
+    .map((c, i) => (fillRange.length === 2 && fillRange.every(Number.isFinite)
+      ? { ...c, fill: fillRange[0] + ((i * 0.618) % 1) * (fillRange[1] - fillRange[0]) }
+      : c));
   const status = document.getElementById('status');
   const grid = document.getElementById('grid');
   const rows = [];

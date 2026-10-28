@@ -64,7 +64,10 @@
 <section class="camera" id="camera" aria-label="カメラ" hidden>
   <div class="cam-top">
     <button class="round-btn" id="cam-close" type="button" aria-label="カメラを閉じる"><span data-icon="close"></span></button>
-    <p class="cam-hint" id="cam-hint">書類の四隅が入るように構えてください</p>
+    <div class="cam-center">
+      <p class="cam-hint" id="cam-hint">書類の四隅が入るように構えてください</p>
+      <p class="cam-res" id="cam-res"></p>
+    </div>
     <div class="cam-actions">
       <button class="pill-btn" id="cam-auto" type="button" aria-pressed="false" aria-label="自動撮影">自動</button>
       <button class="round-btn" id="cam-torch" type="button" aria-label="ライト" aria-pressed="false" hidden><span data-icon="torch"></span></button>
@@ -149,9 +152,9 @@
   <fieldset class="field">
     <legend>画質</legend>
     <div class="opts">
-      <label><input type="radio" name="exp-quality" id="exp-q-light" value="light"><span>軽量<small>100 dpi</small></span></label>
-      <label><input type="radio" name="exp-quality" id="exp-q-standard" value="standard" checked><span>標準<small>150 dpi</small></span></label>
-      <label><input type="radio" name="exp-quality" id="exp-q-high" value="high"><span>高画質<small>200 dpi</small></span></label>
+      <label><input type="radio" name="exp-quality" id="exp-q-light" value="light"><span>軽量<small>120 dpi</small></span></label>
+      <label><input type="radio" name="exp-quality" id="exp-q-standard" value="standard" checked><span>標準<small>200 dpi</small></span></label>
+      <label><input type="radio" name="exp-quality" id="exp-q-high" value="high"><span>高画質<small>300 dpi</small></span></label>
     </div>
   </fieldset>
   <p class="exp-note" id="exp-note"></p>
@@ -180,6 +183,14 @@
       <label><input type="radio" name="set-shape" id="set-shape-card" value="card"><span>名刺<small>1 : 1.62</small></span></label>
     </div>
     <p class="field-note">形を選ぶと、その縦横比の書類を見つけやすくなり、仕上がりもその比率にそろいます。</p>
+  </fieldset>
+  <fieldset class="field">
+    <legend>撮影方法</legend>
+    <div class="opts">
+      <label><input type="radio" name="set-capture" id="set-capture-live" value="live" checked><span>アプリ内カメラ<small>四隅を見ながら連続</small></span></label>
+      <label><input type="radio" name="set-capture" id="set-capture-app" value="app"><span>カメラアプリ<small>1枚ずつ・高画質</small></span></label>
+    </div>
+    <p class="field-note">文字が粗く見えるときは「カメラアプリ」を選ぶと、端末のカメラの最高画質で撮れます。撮ったあとで四隅を確かめる画面が開きます。</p>
   </fieldset>
   <label class="switch-row" for="set-auto">
     <span><strong>自動撮影</strong><small>撮影画面で書類を見つけ、手ぶれが収まると自動でシャッターを切ります</small></span>

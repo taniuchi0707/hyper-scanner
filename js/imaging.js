@@ -222,6 +222,27 @@ const Imaging = (() => {
     return { i0, i1, f };
   }
 
+  // 輪郭を少し強めて文字をくっきりさせる（3×3 の平均との差を足す）。
+  // 差が小さいところ（紙の地のざらつき）は触らないので、ノイズは強めない
+  function unsharp(arr, stride, w, h, amount, threshold = 4) {
+    const src = new Uint8ClampedArray(arr);
+    const row = w * stride;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const base = y * row + x * stride;
+        for (let c = 0; c < Math.min(stride, 3); c++) {
+          const k = base + c;
+          const mean = (src[k - row - stride] + src[k - row] + src[k - row + stride]
+            + src[k - stride] + src[k] + src[k + stride]
+            + src[k + row - stride] + src[k + row] + src[k + row + stride]) / 9;
+          const diff = src[k] - mean;
+          if (diff > threshold || diff < -threshold) arr[k] = src[k] + amount * diff;
+        }
+      }
+    }
+    return arr;
+  }
+
   const FILTERS = ['enhance', 'color', 'gray', 'bw'];
 
   // enhance: 影と色かぶりを取って紙を白く（カラーは残す）
@@ -244,7 +265,7 @@ const Imaging = (() => {
       const gR = backgroundGrid(data, 4, 0, w, h, b, gw, gh);
       const gG = backgroundGrid(data, 4, 1, w, h, b, gw, gh);
       const gB = backgroundGrid(data, 4, 2, w, h, b, gw, gh);
-      const lo = 42, hi = 236, k = 255 / (hi - lo), sat = 1.22;
+      const lo = 40, hi = 236, k = 255 / (hi - lo), sat = 1.12;
       let j = 0;
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++, j += 4) {
@@ -256,6 +277,7 @@ const Imaging = (() => {
           data[j] = r; data[j + 1] = g; data[j + 2] = bl;
         }
       }
+      unsharp(data, 4, w, h, 0.6);
       return img;
     }
 
@@ -266,6 +288,8 @@ const Imaging = (() => {
     const N = new Uint8ClampedArray(n);
     let i = 0;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++, i++) N[i] = L[i] * 255 / sample(gL, x, y);
+
+    unsharp(N, 1, w, h, mode === 'bw' ? 0.8 : 0.6);
 
     if (mode === 'gray') {
       const lo = 38, hi = 238, k = 255 / (hi - lo);
@@ -298,6 +322,52 @@ const Imaging = (() => {
     return out;
   }
 
+  // 撮った写真（blob）を、画面に映っていた向き（ref: 映像の1コマ）にそろえる。
+  // 端末によっては写真が横倒しで返るため、0・90・180・270 度に回した縮小画像を映像と比べ、いちばん似ている向きを選ぶ
+  async function alignTo(photoBlob, ref) {
+    const img = await loadImage(photoBlob);
+    const { w, h } = sizeOf(img);
+    const { w: fw, h: fh } = sizeOf(ref);
+    const S = 48;
+    const fr = fw / fh;
+    const thumb = (src, sw, sh, rot) => {
+      const swap = rot % 180 !== 0;
+      const rw = swap ? sh : sw, rh = swap ? sw : sh;
+      // 写真のほうが広く写っていることがあるので、映像と同じ縦横比で中央を切り出して比べる
+      let cw = rw, ch = rw / fr;
+      if (ch > rh) { ch = rh; cw = rh * fr; }
+      const c = makeCanvas(S, Math.round(S / fr));
+      const x = ctx2d(c);
+      x.translate(c.width / 2, c.height / 2);
+      x.scale(c.width / cw, c.height / ch);
+      x.rotate((rot * Math.PI) / 180);
+      x.drawImage(src, -sw / 2, -sh / 2);
+      const d = x.getImageData(0, 0, c.width, c.height).data;
+      const g = new Float32Array(d.length / 4);
+      let mean = 0;
+      for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = d[j] + d[j + 1] + d[j + 2]; mean += g[i]; }
+      mean /= g.length;
+      for (let i = 0; i < g.length; i++) g[i] -= mean;
+      return g;
+    };
+    const base = thumb(ref, fw, fh, 0);
+    let best = 0, bestErr = Infinity;
+    for (const rot of [0, 90, 180, 270]) {
+      const t = thumb(img, w, h, rot);
+      let err = 0;
+      for (let i = 0; i < t.length; i++) err += Math.abs(t[i] - base[i]);
+      if (err < bestErr) { bestErr = err; best = rot; }
+    }
+    if (!best) return photoBlob;
+    const swap = best % 180 !== 0;
+    const out = makeCanvas(swap ? h : w, swap ? w : h);
+    const ctx = out.getContext('2d');
+    ctx.translate(out.width / 2, out.height / 2);
+    ctx.rotate((best * Math.PI) / 180);
+    ctx.drawImage(img, -w / 2, -h / 2);
+    return toBlob(out, 'image/jpeg', 0.94);
+  }
+
   // 1ページ分の仕上がり画像を作る
   function render(source, page, maxLong) {
     const img = warpFrom(source, page.quad, maxLong, page.aspect || null);
@@ -305,5 +375,5 @@ const Imaging = (() => {
     return rotatedCanvas(img, page.rotation || 0);
   }
 
-  return { makeCanvas, toBlob, loadImage, decode, sizeOf, scaleTo, normalize, warp, outputSize, warpFrom, clone, otsu, applyFilter, rotatedCanvas, render };
+  return { makeCanvas, toBlob, loadImage, decode, sizeOf, scaleTo, normalize, warp, outputSize, warpFrom, clone, otsu, applyFilter, rotatedCanvas, alignTo, render };
 })();

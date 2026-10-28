@@ -30,10 +30,11 @@
     gray: 'グレー：影を取ってグレーにします',
     bw: '白黒：文字がくっきりして、PDF も軽くなります',
   };
+  // 撮った写真より細かくはしない（拡大はしない）ので、実際の細かさは写真の大きさで決まる
   const QUALITY = {
-    light: { dpi: 100, jpeg: 0.6 },
-    standard: { dpi: 150, jpeg: 0.75 },
-    high: { dpi: 200, jpeg: 0.85 },
+    light: { dpi: 120, jpeg: 0.72 },
+    standard: { dpi: 200, jpeg: 0.86 },
+    high: { dpi: 300, jpeg: 0.92 },
   };
   const SIZE_NOTE = {
     auto: '撮った書類の縦横比のまま',
@@ -42,12 +43,12 @@
     letter: 'レターの用紙に収めて配置',
   };
   const A4_LONG_IN = 297 / 25.4;
-  const ORIGINAL_MAX = 2600;
+  const ORIGINAL_MAX = 3200;
   const THUMB_LONG = 420;
   const PREVIEW_LONG = 1600;
   const CORNER_NAMES = ['左上の角', '右上の角', '右下の角', '左下の角'];
   const DETECT_LONG = 480;
-  const LIVE_LONG = 224;
+  const LIVE_LONG = 256;
 
   // 書類の形（長辺 / 短辺）。選ぶと、その比の四角形を見つけやすくなり、仕上がりもその比にそろう
   const SHAPES = {
@@ -72,7 +73,7 @@
     pending: 0,
     exporting: false,
     pdf: null,
-    settings: { shape: 'free', autoCapture: false },
+    settings: { shape: 'free', autoCapture: false, captureMode: 'live' },
   };
 
   // claude.ai の Artifact として開いたときは、保存を downloads の仕組みに任せる
@@ -326,7 +327,9 @@
 
   // 撮影ボタンには透明なファイル選択欄が重ねてあり、押すと端末のカメラアプリが開く。
   // ブラウザの中でカメラが使えるときだけ、その動きを止めて撮影画面を開く
+  // 設定で「カメラアプリ」を選んでいるときも、端末のカメラアプリに任せる（いちばん高画質）
   function interceptForLiveCamera(e, replaceId = null) {
+    if (state.settings.captureMode === 'app') return;
     if (state.liveCamera === null) state.liveCamera = liveCameraPossible();
     if (!state.liveCamera) return;
     e.preventDefault();
@@ -336,9 +339,10 @@
   async function startLiveCamera(replaceId = null) {
     let stream;
     try {
+      // 書類向きの 4:3 で、できるだけ大きな映像を頼む（多くの端末は 16:9 より 4:3 のほうが画素が多い）
       stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 3072 } },
       });
     } catch (err) {
       state.liveCamera = false;
@@ -365,9 +369,25 @@
     try { caps = track.getCapabilities ? track.getCapabilities() : {}; } catch (e) { caps = {}; }
     $('cam-torch').hidden = !caps.torch;
     $('cam-torch').setAttribute('aria-pressed', 'false');
-    if (typeof ImageCapture === 'function') {
-      try { state.camera.imageCapture = new ImageCapture(track); } catch (e) { state.camera.imageCapture = null; }
+    if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+      track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
     }
+    const cam = state.camera;
+    if (typeof ImageCapture === 'function') {
+      try {
+        cam.imageCapture = new ImageCapture(track);
+        // 写真として撮れるいちばん大きなサイズ（動画の1コマよりずっと細かい）
+        cam.imageCapture.getPhotoCapabilities()
+          .then((pc) => {
+            if (pc && pc.imageWidth && pc.imageWidth.max) cam.photoSize = { w: pc.imageWidth.max, h: pc.imageHeight.max };
+            updateCamRes();
+          })
+          .catch(() => {});
+      } catch (e) {
+        cam.imageCapture = null;
+      }
+    }
+    video.addEventListener('loadedmetadata', updateCamRes, { once: true });
     $('cam-gallery').hidden = !!replaceId;
     $('cam-shutter').disabled = false;
     $('cam-auto').setAttribute('aria-pressed', String(state.settings.autoCapture));
@@ -405,7 +425,7 @@
     if (video.readyState >= 2 && video.videoWidth) {
       const found = Detect.find(video, { long: LIVE_LONG, aspect: shapeAspect() });
       const now = performance.now();
-      if (found && found.score >= 0.45) {
+      if (found && found.score >= 0.35) {
         const q = found.quad;
         const prev = cam.quad;
         const moved = prev ? quadMove(prev, q) : 1;
@@ -516,10 +536,19 @@
     frame.getContext('2d').drawImage(video, 0, 0);
     const hint = cam.quad ? { quad: cam.quad.map((p) => p.slice()), ratio: video.videoWidth / video.videoHeight } : null;
     let blob = null;
-    if (cam.imageCapture && !cam.torch) {
-      try { blob = await withTimeout(cam.imageCapture.takePhoto(), 3500); } catch (e) { blob = null; }
+    if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
+      try {
+        const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : undefined;
+        const photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
+        // 端末によっては写真が横倒しで返るので、映像の向きに合わせて回す
+        blob = await Imaging.alignTo(photo, frame);
+      } catch (e) {
+        blob = null;
+        cam.photoFailed = true; // 次からは待たずに映像の1コマを使う
+        updateCamRes();
+      }
     }
-    if (!blob) blob = await Imaging.toBlob(frame, 'image/jpeg', 0.92);
+    if (!blob) blob = await Imaging.toBlob(frame, 'image/jpeg', 0.95);
     cam.busy = false;
     if (state.camera === cam) $('cam-shutter').disabled = false;
 
@@ -532,6 +561,17 @@
     cam.added++;
     enqueue(() => addImage(blob, { hint }));
     updateCamThumb();
+  }
+
+  // 撮影画面の上に、映像と写真の大きさを小さく出す（画質の目安）
+  function updateCamRes() {
+    const cam = state.camera;
+    if (!cam) return;
+    const video = $('cam-video');
+    const parts = [];
+    if (video.videoWidth) parts.push(`映像 ${video.videoWidth}×${video.videoHeight}`);
+    if (cam.photoSize && !cam.photoFailed) parts.push(`写真 ${cam.photoSize.w}×${cam.photoSize.h}`);
+    $('cam-res').textContent = parts.join(' ・ ');
   }
 
   function toggleAutoCapture() {
@@ -1177,9 +1217,12 @@
     if (s && typeof s === 'object') {
       if (SHAPES[s.shape]) state.settings.shape = s.shape;
       state.settings.autoCapture = !!s.autoCapture;
+      if (s.captureMode === 'app' || s.captureMode === 'live') state.settings.captureMode = s.captureMode;
     }
     const radio = document.querySelector(`input[name="set-shape"][value="${state.settings.shape}"]`);
     if (radio) radio.checked = true;
+    const mode = document.querySelector(`input[name="set-capture"][value="${state.settings.captureMode}"]`);
+    if (mode) mode.checked = true;
     $('set-auto').checked = state.settings.autoCapture;
   }
 
@@ -1340,6 +1383,13 @@
       state.settings.shape = r.value;
       saveSettings();
       toast(`書類の形を「${SHAPES[r.value].label}」にしました。これから撮るページに使います`);
+    }));
+    document.querySelectorAll('input[name="set-capture"]').forEach((r) => r.addEventListener('change', () => {
+      state.settings.captureMode = r.value;
+      saveSettings();
+      toast(r.value === 'app'
+        ? '撮影ボタンで端末のカメラアプリを開きます（1枚ずつ、いちばん高画質）'
+        : '撮影ボタンでアプリ内のカメラを開きます（四隅を見ながら続けて撮れます）');
     }));
     $('set-auto').addEventListener('change', () => {
       state.settings.autoCapture = $('set-auto').checked;
