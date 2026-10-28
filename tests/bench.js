@@ -177,6 +177,48 @@
     c.width = W; c.height = H;
     const cx = c.getContext('2d');
     cx.putImageData(img, 0, 0);
+    if (params.get('real')) {
+      // ?real=1: 実際の撮影でよくある邪魔を足す（場面の設定とは別の乱数で決める）
+      const xr = mulberry32(seed + 99);
+      // 書類を押さえる指。画面の外から書類のふちにかかる
+      const nf = xr() < 0.6 ? 1 + (xr() < 0.35 ? 1 : 0) : 0;
+      for (let f = 0; f < nf; f++) {
+        const k = (xr() * 4) | 0;
+        const t = 0.03 + xr() * 0.94;
+        const P = q[k], Q = q[(k + 1) % 4];
+        const ex = P[0] + (Q[0] - P[0]) * t, ey = P[1] + (Q[1] - P[1]) * t;
+        const len = Math.hypot(Q[0] - P[0], Q[1] - P[1]);
+        let nx = -(Q[1] - P[1]) / len, ny = (Q[0] - P[0]) / len;
+        const mx = (q[0][0] + q[2][0]) / 2, my = (q[0][1] + q[2][1]) / 2;
+        if ((mx - ex) * nx + (my - ey) * ny < 0) { nx = -nx; ny = -ny; } // 内向き
+        const fw = Math.max(W, H) * (0.035 + xr() * 0.02);
+        const tipIn = fw * (0.6 + xr() * 1.2);
+        const ang = (xr() - 0.5) * 0.8;
+        const dxn = nx * Math.cos(ang) - ny * Math.sin(ang), dyn = nx * Math.sin(ang) + ny * Math.cos(ang);
+        const ax = ex - dxn * Math.max(W, H), ay = ey - dyn * Math.max(W, H);
+        const bx = ex + dxn * tipIn, by = ey + dyn * tipIn;
+        const g = cx.createLinearGradient(bx - dyn * fw, by + dxn * fw, bx + dyn * fw, by - dxn * fw);
+        const tone = [[224, 172, 140], [198, 140, 108], [240, 200, 170], [150, 100, 72]][(xr() * 4) | 0];
+        g.addColorStop(0, `rgb(${tone.map((v) => v * 0.75 | 0)})`);
+        g.addColorStop(0.5, `rgb(${tone})`);
+        g.addColorStop(1, `rgb(${tone.map((v) => v * 0.8 | 0)})`);
+        cx.save();
+        cx.lineCap = 'round';
+        cx.strokeStyle = 'rgba(0,0,0,.25)'; cx.lineWidth = fw * 2.1; cx.filter = 'blur(6px)';
+        cx.beginPath(); cx.moveTo(ax + 6, ay + 8); cx.lineTo(bx + 6, by + 8); cx.stroke();
+        cx.filter = 'none'; cx.strokeStyle = g; cx.lineWidth = fw * 2;
+        cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(bx, by); cx.stroke();
+        cx.restore();
+      }
+      // つやのある紙の照り返し
+      if (xr() < 0.3) {
+        const gx0 = q[0][0] + (q[2][0] - q[0][0]) * (0.2 + xr() * 0.6), gy0 = q[0][1] + (q[2][1] - q[0][1]) * (0.2 + xr() * 0.6);
+        const rr = Math.max(W, H) * (0.06 + xr() * 0.1);
+        const g = cx.createRadialGradient(gx0, gy0, 0, gx0, gy0, rr);
+        g.addColorStop(0, 'rgba(255,255,255,.85)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+        cx.fillStyle = g; cx.fillRect(gx0 - rr, gy0 - rr, rr * 2, rr * 2);
+      }
+    }
     if (cfg.blur) {
       const c2 = document.createElement('canvas');
       c2.width = W; c2.height = H;
@@ -284,7 +326,7 @@
     const t1 = performance.now() - t0;
     const aspectOpt = params.get('aspect') ? Number(params.get('aspect')) : null;
     t0 = performance.now();
-    const prevFound = typeof DetectV2 !== 'undefined' ? DetectV2.find(scene.bmp, { long, aspect: aspectOpt }) : null;
+    const prevFound = typeof DetectV2 !== 'undefined' ? DetectV2.find(scene.bmp, { long, aspect: aspectOpt, quick, refineLong: Number(params.get('refine')) || 0 }) : null;
     const tp = performance.now() - t0;
     const prev = evaluate(prevFound && prevFound.quad, scene.gt, scene.W, scene.H);
     let source = scene.bmp;
@@ -317,24 +359,62 @@
       row.gtExplain = found.debug.explain(gtN);
       row.bestExplain = found.debug.explain(found.quad);
       row.unrefinedErr = evaluate(found.debug.unrefined, scene.gt, scene.W, scene.H).err;
+      row.refined = found.debug.refined.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4), area: +(Geo.area(c.q.map(([x, y]) => [x, y])) ).toFixed(3) }));
       row.regions = found.debug.regions.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4) }));
       row.top = found.debug.top.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4) }));
       // 正解の各辺に近い直線が、直線の候補に入っているか（角度 3° と 1.5% 以内）
       const [dw, dh] = found.debug.size;
       const g = scene.gt.map(([x, y]) => [x * dw / scene.W, y * dh / scene.H]);
+      const near = (l, A, B, t) => {
+        const d = Math.abs(l.t - t);
+        if (Math.min(d, 180 - d) > 3) return false;
+        const c = Math.cos(l.t * Math.PI / 180), s = Math.sin(l.t * Math.PI / 180);
+        const tol = 0.015 * Math.max(dw, dh);
+        return Math.abs(c * A[0] + s * A[1] - l.rho) <= tol && Math.abs(c * B[0] + s * B[1] - l.rho) <= tol;
+      };
       row.gtLines = g.map((P, k) => {
         const Q = g[(k + 1) % 4];
         let t = Math.atan2(Q[1] - P[1], Q[0] - P[0]) * 180 / Math.PI + 90;
         t = ((t % 180) + 180) % 180;
         const c = Math.cos(t * Math.PI / 180), s = Math.sin(t * Math.PI / 180);
         const rho = c * P[0] + s * P[1];
-        const hit = found.debug.lines.findIndex((l) => {
-          const d = Math.abs(l.t - t);
-          return (d <= 3 && Math.abs(l.rho - rho) <= 0.015 * Math.max(dw, dh)) || (d >= 177 && Math.abs(l.rho + rho) <= 0.015 * Math.max(dw, dh));
-        });
+        const hit = found.debug.lines.findIndex((l) => near(l, P, Q, t));
         return hit;
       });
       row.nLines = found.debug.lines.length;
+      // 直線の候補の上限をなくして、正解の各辺の票数と順位を調べる
+      {
+        const P = Detect._parts;
+        const cv = document.createElement('canvas'); cv.width = dw; cv.height = dh;
+        const cx2 = cv.getContext('2d', { willReadFrequently: true }); cx2.imageSmoothingQuality = 'high';
+        cx2.drawImage(scene.bmp, 0, 0, dw, dh);
+        const ctx = P.makeContext({ data: cx2.getImageData(0, 0, dw, dh).data, w: dw, h: dh });
+        const edges = P.thinEdges(ctx.gx, ctx.gy, ctx.mag, dw, dh, 0.15 * ctx.gscale);
+        const all = P.houghLines(edges, ctx.gx, ctx.gy, dw, dh, 400, 1, 400);
+        row.gtVotes = g.map((Pt, k) => {
+          const Q = g[(k + 1) % 4];
+          let t = Math.atan2(Q[1] - Pt[1], Q[0] - Pt[0]) * 180 / Math.PI + 90;
+          t = ((t % 180) + 180) % 180;
+          const cc = Math.cos(t * Math.PI / 180), ss = Math.sin(t * Math.PI / 180);
+          const rho = cc * Pt[0] + ss * Pt[1];
+          const i = all.findIndex((l) => near(l, Pt, Q, t));
+          return i < 0 ? 'なし' : `${i}位/${all[i].votes}票`;
+        });
+        if (params.get('viz')) {
+          // ?viz=1: 境目の点（白）と、正解（緑）・選ばれた直線（赤）を描く
+          const vc = document.createElement('canvas'); vc.width = dw; vc.height = dh;
+          const vx = vc.getContext('2d');
+          const id = vx.createImageData(dw, dh);
+          for (let i = 0; i < dw * dh; i++) { const v = edges[i] ? 255 : Math.min(120, ctx.mag[i] / ctx.gscale * 255); id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+          vx.putImageData(id, 0, 0);
+          vx.strokeStyle = '#22c55e'; vx.lineWidth = 1; vx.beginPath(); g.forEach(([x, y], k) => (k ? vx.lineTo(x, y) : vx.moveTo(x, y))); vx.closePath(); vx.stroke();
+          vx.strokeStyle = 'rgba(255,60,60,.7)';
+          for (const l of all.slice(0, 12)) { const cc = Math.cos(l.t * Math.PI / 180), ss = Math.sin(l.t * Math.PI / 180); vx.beginPath(); vx.moveTo(cc * l.rho - ss * 2000, ss * l.rho + cc * 2000); vx.lineTo(cc * l.rho + ss * 2000, ss * l.rho - cc * 2000); vx.stroke(); }
+          vc.style.cssText = 'width:480px;image-rendering:pixelated;margin:4px';
+          document.getElementById('grid').before(vc);
+        }
+        row.voteTop = all.slice(0, 24).map((l) => `${l.t}°:${l.votes}`).join(' ');
+      }
       row.cornerErr = v2.q ? v2.q.map((p, k) => Math.round(Geo.dist(p, scene.gt[k]))) : null;
     }
     if (timing) { delete timing._t; row.timing = timing; }

@@ -116,9 +116,11 @@ try {
     }
     if (args.includes('--dump')) {
       for (const row of r.rows) {
-        const { name, bg, kind, v2, score, gtScore, gtLines, nLines, top, gtExplain, bestExplain, regions } = row;
+        const { name, bg, kind, v2, score, gtScore, gtLines, nLines, top, gtExplain, bestExplain, regions, refined } = row;
         console.log(JSON.stringify({ name, bg, kind, err: +(v2 * 100).toFixed(2), score: +score.toFixed(3), gtScore: gtScore && +gtScore.toFixed(3), gtLines, nLines, top: top && top.slice(0, 4) }));
+        console.log('   票: ' + JSON.stringify(row.gtVotes) + ' / ' + row.voteTop);
         console.log('   領域: ' + JSON.stringify(regions));
+        console.log('   精密化後: ' + JSON.stringify(refined));
         console.log('   正解: ' + JSON.stringify(gtExplain));
         console.log('   選択: ' + JSON.stringify(bestExplain));
       }

@@ -411,6 +411,7 @@
       }
     }
     video.addEventListener('loadedmetadata', updateCamRes, { once: true });
+    video.onresize = updateCamRes; // 撮る瞬間だけ映像を大きくしたあとも、表示を今の大きさに合わせる
     $('cam-gallery').hidden = !!replaceId;
     $('cam-shutter').disabled = false;
     $('cam-auto').setAttribute('aria-pressed', String(state.settings.autoCapture));
@@ -497,9 +498,11 @@
       }
       if (state.camera !== cam) return;
       onDetected(cam, found);
-      // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする
+      // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする。
+      // 枠が止まっている間は間隔を倍にする（構えて待つ間の電池と発熱を抑える）
       const spent = performance.now() - started;
-      await sleep(useWorker ? Math.max(LIVE_GAP - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
+      const gap = cam.stableSince ? LIVE_GAP * 2 : LIVE_GAP;
+      await sleep(useWorker ? Math.max(gap - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
     }
   }
 
@@ -643,9 +646,8 @@
       }
     }
     if (photo) {
-      // 端末によっては写真が横倒しで返るので、映像の向きを手本にしてワーカーで回す
-      ref = frame ? await createImageBitmap(frame, { resizeWidth: 160, resizeHeight: Math.max(1, Math.round((160 * frame.height) / frame.width)) }) : null;
-      if (frame) frame.close();
+      // 端末によっては写真が横倒しで返るので、映像の向きを手本にしてワーカーで回す（手本を縮めるのもワーカーで）
+      ref = frame;
       source = photo;
     } else {
       const large = await grabLarge(cam, video);

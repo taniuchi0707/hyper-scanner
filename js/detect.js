@@ -207,7 +207,7 @@ function DetectModule(Geo, Imaging) {
   }
 
   // ハフ変換。境目の点ごとに、勾配の向き ±5° の直線にだけ票を入れる
-  function houghLines(edges, gx, gy, w, h, maxLines, minVotes) {
+  function houghLines(edges, gx, gy, w, h, maxLines, minVotes, perDir = Math.ceil(maxLines / 4)) {
     const diag = Math.ceil(Math.hypot(w, h));
     const nr = 2 * diag + 1;
     const acc = new Int32Array(TH * nr);
@@ -248,7 +248,6 @@ function DetectModule(Geo, Imaging) {
     peaks.sort((a, b) => b.votes - a.votes);
     const lines = [];
     // 同じ向きの線ばかり（布の格子柄、タイルの目地、罫線）で埋まらないよう、向きごとの本数に上限を設ける
-    const perDir = Math.ceil(maxLines / 4);
     for (const p of peaks) {
       // 0° と 180° をまたぐ同じ直線を除く
       const dup = lines.some((l) => {
@@ -951,7 +950,7 @@ function DetectModule(Geo, Imaging) {
     const aligned = alignedSampler(ctx);
     const band = bandSampler(ctx);
     const edges = thinEdges(gx, gy, mag, w, h, 0.15 * gscale);
-    const lines = houghLines(edges, gx, gy, w, h, quick ? 22 : 36, Math.max(12, Math.round(0.1 * ctx.long)))
+    const lines = houghLines(edges, gx, gy, w, h, quick ? 22 : 36, Math.max(12, Math.round(0.1 * ctx.long)), exp.perDir ? 9 : undefined)
       .map((l) => ({ ...l, prof: profileLine(l, ctx, strong, grad, band, aligned) }))
       .filter((l) => l.prof);
     mark('lines');
@@ -1014,8 +1013,8 @@ function DetectModule(Geo, Imaging) {
     candidates.sort((a, b) => b.s - a.s);
 
     // 上位の候補は、辺を境目に合わせ直してから比べ直す
-    // （撮影中の quick では、上位 3 件を 1 回だけ合わせて軽くする）
-    const top = candidates.slice(0, doRefine ? (quick ? 3 : 8) : 1).map((c) => {
+    // （撮影中の quick では、上位 6 件を 1 回だけ合わせて軽くする）
+    const top = candidates.slice(0, doRefine ? (quick ? 6 : 8) : 1).map((c) => {
       if (!doRefine) return c;
       // 広めに探して大きなずれを直し、狭く探して細かく合わせる
       const wide = Math.max(4, Math.round(ctx.long / 60));
@@ -1047,10 +1046,15 @@ function DetectModule(Geo, Imaging) {
       }
       return n;
     };
-    const bestArea = Geo.area(best.q);
-    for (const c of top.slice(1)) {
-      if (c.s < best.s * 0.85 || Geo.area(c.q) < bestArea * 1.15) continue;
-      if (shared(best.q, c.q) >= 2) { best = c; break; }
+    // 写真や表で区切られた書類は、上の部分・写真まで・全体のように何重にもなるので、外側へ順にたどる
+    const floor = best.s * 0.85;
+    for (let moved = true; moved;) {
+      moved = false;
+      const bestArea = Geo.area(best.q);
+      for (const c of top) {
+        if (c === best || c.s < floor || Geo.area(c.q) < bestArea * 1.15) continue;
+        if (shared(best.q, c.q) >= 2) { best = c; moved = true; break; }
+      }
     }
 
     const norm = (q) => q.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]);
@@ -1065,6 +1069,7 @@ function DetectModule(Geo, Imaging) {
         lines: lines.filter((l) => !l.border).map((l) => ({ t: l.t, rho: l.rho, votes: l.votes })),
         unrefined: norm(best.raw || best.q),
         top: candidates.slice(0, 8).map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
+        refined: top.map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
         regions: candidates.filter((c) => c.from !== 'lines').map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
         scoreOf: (qn) => score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h]))),
         explain: (qn) => { const ex = {}; score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h])), ex); return ex; },
