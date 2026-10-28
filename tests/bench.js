@@ -392,6 +392,8 @@
     .map((c, i) => (fillRange.length === 2 && fillRange.every(Number.isFinite)
       ? { ...c, fill: fillRange[0] + ((i * 0.618) % 1) * (fillRange[1] - fillRange[0]) }
       : c))
+    // ?tilt=1.5: 斜めの具合（前後・左右の傾き）を何倍かにする
+    .map((c) => (params.get('tilt') ? { ...c, rx: c.rx * Number(params.get('tilt')), ry: c.ry * Number(params.get('tilt')) } : c))
     .filter((c) => !only || only.split(',').includes(c.name));
   const status = document.getElementById('status');
   const grid = document.getElementById('grid');
