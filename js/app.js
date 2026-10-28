@@ -679,6 +679,8 @@
     flash.classList.remove('on');
     void flash.offsetWidth;
     flash.classList.add('on');
+    // 短く震わせて、撮れたことをすぐ伝える（写真の処理で映像が一瞬止まっても、押せたとわかるように）
+    try { if (navigator.vibrate) navigator.vibrate(25); } catch (e) { /* 震えない端末もある */ }
 
     // まず映像の1コマを確保し、撮影 API が使えればより高解像度の写真に差し替える。
     // 縮小・向きの補正・四隅の検出などの重い処理は、ワーカーにまとめて任せる
