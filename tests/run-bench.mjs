@@ -104,7 +104,16 @@ try {
   const pct = (x) => `${(x * 100).toFixed(1)}%`;
   for (const r of results) {
     if (r.error) { console.log(`${r.query}: ${r.error}`); continue; }
-    if (r.profile) { console.log(`[${r.query}] ${JSON.stringify(r.profile)}`); continue; }
+    if (r.profile) {
+      console.log(`[${r.query}] ${JSON.stringify(r.profile)}`);
+      if (args.includes('--dump')) {
+        for (const row of r.rows) {
+          console.log(JSON.stringify({ name: row.name, edge: row.edge, err: +(row.v2 * 100).toFixed(2), refined: row.refined }));
+          console.log('   選択: ' + JSON.stringify(row.bestExplain));
+        }
+      }
+      continue;
+    }
     const s = r.summary;
     const v = s.v2;
     console.log(`[${r.query || '既定'}] 場面 ${s.scenes} / 0.8%未満 ${pct(v.ok08)} / 0.3%未満 ${pct(v.ok03 || 0)} / 中央値 ${(v.median * 100).toFixed(3)}% / ${v.ms.toFixed(1)}ms`
