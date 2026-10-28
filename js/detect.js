@@ -373,7 +373,7 @@ function DetectModule(Geo, Imaging) {
 
   // ---------- 点数づけ ----------
 
-  function makeContext({ data: px, w, h }) {
+  function makeContext({ data: px, w, h }, chroma = 0) {
     const n = w * h;
     const lum = new Float32Array(n);
     const sat = new Float32Array(n);
@@ -391,6 +391,15 @@ function DetectModule(Geo, Imaging) {
     const P = new Float32Array(n);
     for (let i = 0; i < n; i++) P[i] = L[i] - 0.6 * satB[i];
     const { gx, gy, mag } = sobel(L, w, h);
+    if (chroma) {
+      // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える
+      const C = boxBlur(boxBlur(closing(sat, w, h, r), w, h, 1), w, h, 1);
+      const cg = sobel(C, w, h);
+      for (let i = 0; i < n; i++) {
+        const m = chroma * cg.mag[i];
+        if (m > mag[i]) { mag[i] = m; gx[i] = chroma * cg.gx[i]; gy[i] = chroma * cg.gy[i]; }
+      }
+    }
     const gscale = Math.max(40, percentile(mag, 0.99));
     // 模様の多さ（境目の強さを広くぼかしたもの）。文字を消した紙の中は滑らかなので、布の柄や木目の上でも紙を見分けやすい
     // （半分の大きさで求める）
@@ -932,7 +941,8 @@ function DetectModule(Geo, Imaging) {
     const px = pixelsOf(source, long);
     if (!px) return null;
     mark('pixels');
-    const ctx = makeContext(px);
+    // 写真から探すときは、色の境目も使う（撮影中は軽さを優先して明るさだけ）
+    const ctx = makeContext(px, quick ? 0 : 1);
     mark('prepare');
     const { w, h, gx, gy, mag, gscale } = ctx;
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
