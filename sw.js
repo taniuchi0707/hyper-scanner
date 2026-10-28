@@ -1,6 +1,6 @@
 // オフラインでも開けるよう、アプリ本体をキャッシュする。
 // 通信できるときは常に最新を取りに行き（ネットワーク優先）、つながらないときだけキャッシュを使う。
-const CACHE = 'hyper-scanner-v3';
+const CACHE = 'hyper-scanner-v4';
 const SHELL = [
   './',
   './index.html',

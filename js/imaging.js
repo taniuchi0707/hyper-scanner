@@ -81,8 +81,8 @@ function ImagingModule(Geo) {
   }
 
   const sizeOf = (src) => ({
-    w: src.naturalWidth || src.videoWidth || src.width,
-    h: src.naturalHeight || src.videoHeight || src.height,
+    w: src.naturalWidth || src.videoWidth || src.displayWidth || src.width,
+    h: src.naturalHeight || src.videoHeight || src.displayHeight || src.height,
   });
 
   // EXIF の向き 5〜8（縦横が入れ替わる向き）に回して描く
@@ -141,6 +141,23 @@ function ImagingModule(Geo) {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(cur, 0, 0, out.width, out.height);
     return out;
+  }
+
+  // 映像の1コマ（VideoFrame）を、長辺 long の RGBA に縮めて取り出す（撮影中の検出用。ワーカーの中で使う）。
+  // 縮めるのはブラウザの画像処理（createImageBitmap）に任せる（JavaScript で縮めるより数倍速い）
+  let frameCanvas = null;
+  async function framePixels(frame, long) {
+    const W = frame.displayWidth, H = frame.displayHeight;
+    const s = Math.min(1, long / Math.max(W, H));
+    const w = Math.max(32, Math.round(W * s)), h = Math.max(32, Math.round(H * s));
+    let src = frame;
+    try { src = await createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }); } catch (e) { src = frame; }
+    if (!frameCanvas || frameCanvas.width !== w || frameCanvas.height !== h) frameCanvas = makeCanvas(w, h);
+    const x = ctx2d(frameCanvas);
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(src, 0, 0, w, h);
+    if (src !== frame) src.close();
+    return { data: x.getImageData(0, 0, w, h).data, w, h };
   }
 
   // 撮影・取り込んだ画像を、向きをそろえた上限サイズの JPEG にする。
@@ -467,7 +484,7 @@ function ImagingModule(Geo) {
     return rotatedCanvas(img, page.rotation || 0);
   }
 
-  return { makeCanvas, toBlob, loadImage, decode, sizeOf, scaleTo, normalize, warp, outputSize, warpFrom, clone, otsu, applyFilter, rotatedCanvas, alignTo, render };
+  return { makeCanvas, toBlob, loadImage, decode, sizeOf, scaleTo, framePixels, normalize, warp, outputSize, warpFrom, clone, otsu, applyFilter, rotatedCanvas, alignTo, render };
 }
 
 const Imaging = ImagingModule(Geo);

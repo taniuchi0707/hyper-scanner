@@ -50,6 +50,9 @@
   const DETECT_LONG = 480;
   const REFINE_LONG = 1600; // 写真から探すときは、最後にこの解像度で辺を合わせ直す
   const LIVE_LONG = 320; // 撮影中の検出の解像度（ワーカーで動くので、前より細かくできる）
+  const LIVE_GAP = 80; // 撮影中の検出は 1 秒に約 12 回まで。端末が熱で遅くならないようにする（枠は描画側でなめらかに動かす）
+  const PREVIEW_SIZE = { w: 1920, h: 1440 }; // 撮影画面の映像の大きさ
+  const LARGE_SIZE = { w: 4096, h: 3072 }; // 写真として撮れない端末で、撮る瞬間だけ頼む映像の大きさ
 
   // 書類の形（長辺 / 短辺）。選ぶと、その比の四角形を見つけやすくなり、仕上がりもその比にそろう
   const SHAPES = {
@@ -353,10 +356,11 @@
   async function startLiveCamera(replaceId = null) {
     let stream;
     try {
-      // 書類向きの 4:3 で、できるだけ大きな映像を頼む（多くの端末は 16:9 より 4:3 のほうが画素が多い）
+      // 見るための映像は、画面にくっきり映る 4:3 の大きさにとどめる。画質は写真として撮る（capture）。
+      // 4096×3072 などの最大の映像は、端末がコマを運ぶだけで重くなり、映像もカクつく
       stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 3072 } },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: PREVIEW_SIZE.w }, height: { ideal: PREVIEW_SIZE.h }, frameRate: { ideal: 30 } },
       });
     } catch (err) {
       state.liveCamera = false;
@@ -375,7 +379,7 @@
     state.camera = {
       stream, track, replaceId,
       quad: null, display: null, score: 0, lastSeen: 0, raf: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
-      stableSince: 0, autoLock: null,
+      stableSince: 0, autoLock: null, caps: {}, drawn: '',
     };
     video.srcObject = stream;
     video.play().catch(() => {});
@@ -387,6 +391,7 @@
       track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
     }
     const cam = state.camera;
+    cam.caps = caps;
     if (typeof ImageCapture === 'function') {
       try {
         cam.imageCapture = new ImageCapture(track);
@@ -411,6 +416,8 @@
     $('cam-auto').setAttribute('aria-pressed', String(state.settings.autoCapture));
     setShutterProgress(0);
     $('camera').hidden = false;
+    // 裏に隠れたページ一覧は描かない（アニメーションや描き直しで撮影を重くしない）
+    $('app').classList.add('under-camera');
     updateBars();
     updateCamThumb();
     camLoop(cam);
@@ -425,14 +432,19 @@
     $('cam-video').srcObject = null;
     state.camera = null;
     $('camera').hidden = true;
+    $('app').classList.remove('under-camera');
     updateBars();
     if (cam.added) toast(`${cam.added}ページを追加しました`);
   }
 
   const quadMove = (a, b) => Math.max(...a.map((p, i) => Math.abs(p[0] - b[i][0]) + Math.abs(p[1] - b[i][1])));
 
+  let shutterP = -1;
   function setShutterProgress(p) {
-    $('cam-shutter').style.setProperty('--p', String(Math.max(0, Math.min(1, p))));
+    const v = Math.round(Math.max(0, Math.min(1, p)) * 100) / 100;
+    if (v === shutterP) return;
+    shutterP = v;
+    $('cam-shutter').style.setProperty('--p', String(v));
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -453,28 +465,41 @@
     }
   }
 
+  // 撮影中の検出に渡す映像のコマ。VideoFrame は今のコマを指すだけで複製しないので、画面側はほぼ止まらない
+  // （縮めるのはワーカーの中）。createImageBitmap で縮めると、元の大きさのまま色に直す処理が画面側で走って重い
+  function liveFrame(video, direct) {
+    if (direct) {
+      try { return new VideoFrame(video); } catch (e) { /* 下で取り出す */ }
+    }
+    return grabFrame(video, LIVE_LONG);
+  }
+
   // 書類の検出を続ける。検出はワーカーで行うので、映像や操作は止まらない。
   // 自動撮影がオンなら、枠が止まってから少し待ってシャッターを切る
   async function camLoop(cam) {
     const video = $('cam-video');
     const useWorker = await Engine.available();
+    const direct = useWorker && typeof VideoFrame === 'function';
     while (state.camera === cam) {
-      if (document.hidden || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
+      // 撮影中（写真の処理でカメラが止まっている間）は調べない
+      if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
       const started = performance.now();
-      const frame = await grabFrame(video, LIVE_LONG);
+      const frame = await liveFrame(video, direct);
       let found = null;
       if (frame) {
         try {
           found = await Engine.detectLive(frame, { long: LIVE_LONG, aspect: shapeAspect(), prior: cam.quad, quick: true });
         } catch (e) {
           found = null;
+        } finally {
+          frame.close(); // ワーカーに渡したあとなら何もしない
         }
       }
       if (state.camera !== cam) return;
       onDetected(cam, found);
-      // ワーカーなら続けてすぐ次を調べる。画面側で調べるときは、かかった時間に合わせて間をあける
+      // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする
       const spent = performance.now() - started;
-      await sleep(useWorker ? 30 : Math.max(120, spent * 2));
+      await sleep(useWorker ? Math.max(LIVE_GAP - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
     }
   }
 
@@ -546,17 +571,22 @@
     const r = { width: canvas.clientWidth, height: canvas.clientHeight };
     const dpr = window.devicePixelRatio || 1;
     const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const s = vw && vh ? Math.min(r.width / vw, r.height / vh) : 0;
+    const dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
+    const pts = cam.display ? cam.display.map(([x, y]) => [ox + x * dw, oy + y * dh]) : null;
+    // 前と同じ絵になるときは描き直さない（枠が止まっている間は何もしない）
+    const key = [W, H, dw, dh, ox, oy, state.settings.autoCapture, !!cam.autoLock, pts ? pts.flat().map((v) => Math.round(v * 4)) : '']
+      .map((v) => (typeof v === 'number' ? Math.round(v) : String(v))).join('|');
+    if (key === cam.drawn) return;
+    cam.drawn = key;
     if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, r.width, r.height);
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw || !vh) return;
-    const s = Math.min(r.width / vw, r.height / vh);
-    const dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
+    if (!s) return;
 
-    if (cam.display) {
-      const pts = cam.display.map(([x, y]) => [ox + x * dw, oy + y * dh]);
+    if (pts) {
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.closePath();
@@ -602,17 +632,26 @@
     const hint = cam.quad ? { quad: cam.quad.map((p) => p.slice()), ratio: video.videoWidth / video.videoHeight } : null;
     const frame = await grabFrame(video, Infinity);
     let source = frame, ref = null;
+    let photo = null;
     if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
       try {
         const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : undefined;
-        const photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
-        // 端末によっては写真が横倒しで返るので、映像の向きを手本にしてワーカーで回す
-        ref = frame ? await createImageBitmap(frame, { resizeWidth: 160, resizeHeight: Math.max(1, Math.round((160 * frame.height) / frame.width)) }) : null;
-        if (frame) frame.close();
-        source = photo;
+        photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
       } catch (e) {
-        cam.photoFailed = true; // 次からは待たずに映像の1コマを使う
+        cam.photoFailed = true; // 次からは待たずに、撮る瞬間だけ大きくした映像で撮る
         updateCamRes();
+      }
+    }
+    if (photo) {
+      // 端末によっては写真が横倒しで返るので、映像の向きを手本にしてワーカーで回す
+      ref = frame ? await createImageBitmap(frame, { resizeWidth: 160, resizeHeight: Math.max(1, Math.round((160 * frame.height) / frame.width)) }) : null;
+      if (frame) frame.close();
+      source = photo;
+    } else {
+      const large = await grabLarge(cam, video);
+      if (large) {
+        if (frame) frame.close();
+        source = large;
       }
     }
     cam.busy = false;
@@ -630,6 +669,42 @@
     updateCamThumb();
   }
 
+  // 写真として撮れない端末（iPhone など）やライトを点けているときは、撮る瞬間だけ映像を大きくして1コマを撮る。
+  // ふだんの映像は軽い大きさのままにしておける。大きくできなければ null（今の映像の1コマを使う）
+  async function grabLarge(cam, video) {
+    const track = cam.track;
+    const caps = cam.caps || {};
+    const cur = Math.max(video.videoWidth, video.videoHeight);
+    const most = Math.max((caps.width && caps.width.max) || 0, (caps.height && caps.height.max) || 0);
+    if (most < cur * 1.25 || typeof track.applyConstraints !== 'function') return null;
+    const base = track.getConstraints ? track.getConstraints() : {};
+    try {
+      await track.applyConstraints({ ...base, width: { ideal: LARGE_SIZE.w }, height: { ideal: LARGE_SIZE.h } });
+      if (!(await videoGrows(video, cur, 2500))) return null;
+      await sleep(300); // 明るさとピントが落ち着くのを待つ
+      cam.largeSize = { w: video.videoWidth, h: video.videoHeight };
+      return await grabFrame(video, Infinity);
+    } catch (e) {
+      return null;
+    } finally {
+      try { await track.applyConstraints(base); } catch (e) { /* 大きいまま続ける */ }
+      if (cam.torch) track.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
+      updateCamRes();
+    }
+  }
+
+  // 映像が cur より大きくなるのを待つ
+  function videoGrows(video, cur, ms) {
+    const grown = () => Math.max(video.videoWidth, video.videoHeight) > cur;
+    if (grown()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); video.removeEventListener('resize', check); resolve(grown()); };
+      const check = () => { if (grown()) done(); };
+      const timer = setTimeout(done, ms);
+      video.addEventListener('resize', check);
+    });
+  }
+
   // 撮影画面の上に、映像と写真の大きさを小さく出す（画質の目安）
   function updateCamRes() {
     const cam = state.camera;
@@ -638,6 +713,7 @@
     const parts = [];
     if (video.videoWidth) parts.push(`映像 ${video.videoWidth}×${video.videoHeight}`);
     if (cam.photoSize && !cam.photoFailed) parts.push(`写真 ${cam.photoSize.w}×${cam.photoSize.h}`);
+    else if (cam.largeSize) parts.push(`撮影 ${cam.largeSize.w}×${cam.largeSize.h}`);
     $('cam-res').textContent = parts.join(' ・ ');
   }
 

@@ -102,6 +102,8 @@ svg { display: block; }
   display: flex;
   flex-direction: column;
 }
+/* 撮影中は、裏に隠れたページ一覧を描かない（スクロール位置などはそのまま残る） */
+.app.under-camera { content-visibility: hidden; }
 
 .topbar {
   display: grid;
@@ -269,14 +271,24 @@ svg { display: block; }
   background: #fff;
 }
 
+/* 動く光は transform だけで動かす（描き直さずに GPU が動かせるので、撮影中の処理の邪魔をしない） */
 .frame .pending {
+  position: relative;
+  overflow: hidden;
   width: 70%;
   aspect-ratio: 1 / 1.414;
-  background: linear-gradient(90deg, var(--rule), var(--paper), var(--rule)) 0 0 / 200% 100%;
+  background: var(--rule);
+}
+.frame .pending::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--paper), transparent);
+  transform: translateX(-100%);
   animation: shimmer 1.2s linear infinite;
 }
 
-@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes shimmer { to { transform: translateX(100%); } }
 
 .badge {
   position: absolute;
@@ -340,16 +352,26 @@ svg { display: block; }
   height: 60%;
   background: repeating-linear-gradient(var(--rule) 0 3px, transparent 3px 11px);
 }
+/* 光の線の通り道（高さ 82%）ごと transform で動かす。top を動かすと毎回レイアウトし直しになる */
 .empty-beam {
   position: absolute;
   left: 0;
   right: 0;
+  top: 8%;
+  height: 82%;
+  animation: beam 2.6s ease-in-out infinite alternate;
+}
+.empty-beam::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
   height: 3px;
   background: var(--accent);
   box-shadow: 0 0 12px 2px var(--accent);
-  animation: beam 2.6s ease-in-out infinite alternate;
 }
-@keyframes beam { from { top: 8%; } to { top: 90%; } }
+@keyframes beam { to { transform: translateY(100%); } }
 
 /* ---------- Dock ---------- */
 

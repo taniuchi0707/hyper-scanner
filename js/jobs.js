@@ -69,7 +69,7 @@ function JobsModule(Geo, Imaging, Detect, Pdf) {
 }
 
 // ---------- ワーカーの中で動く部分 ----------
-function WorkerMain(Jobs, Detect) {
+function WorkerMain(Jobs, Detect, Imaging) {
   'use strict';
   self.onmessage = async (e) => {
     const { id, type, payload } = e.data;
@@ -79,8 +79,13 @@ function WorkerMain(Jobs, Detect) {
       if (type === 'ping') {
         result = 'pong';
       } else if (type === 'detect') {
-        result = Detect.find(payload.bitmap, payload.opts);
-        payload.bitmap.close();
+        // 映像のコマ（VideoFrame）は、縮めて取り出したらすぐ閉じる（カメラの受け皿をふさがない）
+        let src = payload.bitmap;
+        if (typeof VideoFrame === 'function' && src instanceof VideoFrame) {
+          try { src = await Imaging.framePixels(src, payload.opts.long); } finally { payload.bitmap.close(); }
+        }
+        result = Detect.find(src, payload.opts);
+        if (src.close) src.close();
       } else if (type === 'ingest') {
         result = await Jobs.ingest(payload);
       } else if (type === 'detectPage') {
@@ -119,7 +124,7 @@ const Geo = GeoModule();
 const Imaging = ImagingModule(Geo);
 const Detect = DetectModule(Geo, Imaging);
 const Pdf = PdfModule(Imaging);
-WorkerMain(JobsModule(Geo, Imaging, Detect, Pdf), Detect);
+WorkerMain(JobsModule(Geo, Imaging, Detect, Pdf), Detect, Imaging);
 `;
   }
 

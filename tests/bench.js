@@ -202,6 +202,7 @@
       const aspect = i % 9 === 4 ? 2.6 : i % 9 === 7 ? 1.294 : 1.4142;
       list.push({
         name: `#${String(i + 1).padStart(2, '0')}`,
+        seed: 100 + i,
         bg: bgs[i % bgs.length],
         kind: aspect > 2 ? 'receipt' : pick(kinds),
         aspect,
@@ -234,23 +235,47 @@
     return { found: true, err, q };
   }
 
+  // 撮影中の映像と同じ形（NV12 の VideoFrame、BT.601 制限付き）にした場面。?yuv=1 で、検出に Imaging.framePixels を通す
+  function toNV12Frame(bmp) {
+    const W = bmp.width & ~1, H = bmp.height & ~1;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(bmp, 0, 0);
+    const d = x.getImageData(0, 0, W, H).data;
+    const buf = new Uint8Array((W * H * 3) / 2);
+    for (let i = 0, p = 0; i < W * H; i++, p += 4) buf[i] = Math.round(16 + (65.481 * d[p] + 128.553 * d[p + 1] + 24.966 * d[p + 2]) / 255);
+    for (let j = 0; j < H / 2; j++) {
+      for (let i = 0; i < W / 2; i++) {
+        let r = 0, g = 0, b = 0;
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { const p = ((j * 2 + dy) * W + i * 2 + dx) * 4; r += d[p] / 4; g += d[p + 1] / 4; b += d[p + 2] / 4; }
+        buf[W * H + j * W + i * 2] = Math.round(128 + (-37.797 * r - 74.203 * g + 112 * b) / 255);
+        buf[W * H + j * W + i * 2 + 1] = Math.round(128 + (112 * r - 93.786 * g - 18.214 * b) / 255);
+      }
+    }
+    return new VideoFrame(buf, { format: 'NV12', codedWidth: W, codedHeight: H, timestamp: 0, colorSpace: { matrix: 'smpte170m', primaries: 'smpte170m', transfer: 'smpte170m', fullRange: false } });
+  }
+
   const params = new URLSearchParams(location.search);
   const long = Number(params.get('long')) || 480;
+  const quick = params.get('quick') === '1';
+  // ?yuv=canvas は同じ VideoFrame をキャンバスで縮める（前の版の取り出し方）
+  const yuv = params.get('yuv');
   const only = params.get('only');
   // ?fill=0.7-0.92 で、書類が画面に占める割合を変える（スマホでは画面いっぱいに撮ることが多い）
   const fillRange = (params.get('fill') || '').split('-').map(Number);
   const list = configs()
-    .filter((c) => !only || only.split(',').includes(c.name))
     .map((c, i) => (fillRange.length === 2 && fillRange.every(Number.isFinite)
       ? { ...c, fill: fillRange[0] + ((i * 0.618) % 1) * (fillRange[1] - fillRange[0]) }
-      : c));
+      : c))
+    .filter((c) => !only || only.split(',').includes(c.name));
   const status = document.getElementById('status');
   const grid = document.getElementById('grid');
   const rows = [];
   for (let i = 0; i < list.length; i++) {
     const cfg = list[i];
     status.textContent = `${i + 1} / ${list.length}`;
-    const scene = await renderScene(cfg, 100 + i);
+    const scene = await renderScene(cfg, cfg.seed);
     // 書類の一部が画面の外に出ている場面は対象外
     const inside = scene.gt.every(([x, y]) => x > 2 && y > 2 && x < scene.W - 2 && y < scene.H - 2);
     let t0 = performance.now();
@@ -261,9 +286,14 @@
     const prevFound = typeof DetectV2 !== 'undefined' ? DetectV2.find(scene.bmp, { long, aspect: aspectOpt }) : null;
     const tp = performance.now() - t0;
     const prev = evaluate(prevFound && prevFound.quad, scene.gt, scene.W, scene.H);
+    let source = scene.bmp;
+    const frame = yuv ? toNV12Frame(scene.bmp) : null;
     t0 = performance.now();
-    const found = Detect.find(scene.bmp, { long, aspect: aspectOpt, refineLong: Number(params.get('refine')) || 0, debug: !!only });
+    if (yuv === 'canvas') source = frame;
+    else if (frame) source = await Imaging.framePixels(frame, long);
+    const found = Detect.find(source, { long, aspect: aspectOpt, quick, refineLong: Number(params.get('refine')) || 0, debug: !!only });
     const t2 = performance.now() - t0;
+    if (frame) frame.close();
     const v2 = evaluate(found && found.quad, scene.gt, scene.W, scene.H);
     // 縦横比の見積もり: 正解の四隅から求めた幅/高さと、本当の 1/aspect を比べる（素朴な辺の長さの比とも比べる）
     const trueRatio = 1 / cfg.aspect;
@@ -280,8 +310,27 @@
       // 調べるとき用: 正解の四角形の点数と、上位の候補
       const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
       row.gtScore = found.debug.scoreOf(gtN);
+      row.gtExplain = found.debug.explain(gtN);
+      row.bestExplain = found.debug.explain(found.quad);
       row.unrefinedErr = evaluate(found.debug.unrefined, scene.gt, scene.W, scene.H).err;
+      row.regions = found.debug.regions.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4) }));
       row.top = found.debug.top.map((c) => ({ from: c.from, s: c.s, err: +evaluate(c.q, scene.gt, scene.W, scene.H).err.toFixed(4) }));
+      // 正解の各辺に近い直線が、直線の候補に入っているか（角度 3° と 1.5% 以内）
+      const [dw, dh] = found.debug.size;
+      const g = scene.gt.map(([x, y]) => [x * dw / scene.W, y * dh / scene.H]);
+      row.gtLines = g.map((P, k) => {
+        const Q = g[(k + 1) % 4];
+        let t = Math.atan2(Q[1] - P[1], Q[0] - P[0]) * 180 / Math.PI + 90;
+        t = ((t % 180) + 180) % 180;
+        const c = Math.cos(t * Math.PI / 180), s = Math.sin(t * Math.PI / 180);
+        const rho = c * P[0] + s * P[1];
+        const hit = found.debug.lines.findIndex((l) => {
+          const d = Math.abs(l.t - t);
+          return (d <= 3 && Math.abs(l.rho - rho) <= 0.015 * Math.max(dw, dh)) || (d >= 177 && Math.abs(l.rho + rho) <= 0.015 * Math.max(dw, dh));
+        });
+        return hit;
+      });
+      row.nLines = found.debug.lines.length;
       row.cornerErr = v2.q ? v2.q.map((p, k) => Math.round(Geo.dist(p, scene.gt[k]))) : null;
     }
     rows.push(row);

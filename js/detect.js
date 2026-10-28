@@ -13,6 +13,8 @@ function DetectModule(Geo, Imaging) {
   // 縮小した画素を取り出す作業用のキャンバス（大きさごとに使い回す）
   const canvases = new Map();
   function pixelsOf(source, long) {
+    // すでに縮めて取り出した画素（撮影中の映像のコマ）はそのまま使う
+    if (source.data && source.w && source.h) return source;
     const { w: sw, h: sh } = Imaging.sizeOf(source);
     if (!sw || !sh) return null;
     const s = Math.min(1, long / Math.max(sw, sh));
@@ -191,6 +193,8 @@ function DetectModule(Geo, Imaging) {
     }
     peaks.sort((a, b) => b.votes - a.votes);
     const lines = [];
+    // 同じ向きの線ばかり（布の格子柄、タイルの目地、罫線）で埋まらないよう、向きごとの本数に上限を設ける
+    const perDir = Math.ceil(maxLines / 4);
     for (const p of peaks) {
       // 0° と 180° をまたぐ同じ直線を除く
       const dup = lines.some((l) => {
@@ -198,6 +202,9 @@ function DetectModule(Geo, Imaging) {
         return (d <= 3 && Math.abs(l.rho - p.rho) <= 8) || (d >= TH - 3 && Math.abs(l.rho + p.rho) <= 8);
       });
       if (dup) continue;
+      let same = 0;
+      for (const l of lines) if (angleGap(l.t, p.t) <= 3) same++;
+      if (same >= perDir) continue;
       lines.push({ c: COS[p.t], s: SIN[p.t], rho: p.rho, t: p.t, votes: p.votes });
       if (lines.length >= maxLines) break;
     }
@@ -243,10 +250,11 @@ function DetectModule(Geo, Imaging) {
     return out;
   }
 
-  function regionQuads(map, w, h) {
-    const t = otsuOf(map);
+  // map が明るい（below なら thr より小さい）塊を四角形にする。thr を省くと大津の方法で決める
+  function regionQuads(map, w, h, thr = null, below = false) {
+    const t = thr === null ? otsuOf(map) : thr;
     let mask = new Uint8Array(w * h);
-    for (let i = 0; i < mask.length; i++) mask[i] = map[i] > t ? 1 : 0;
+    for (let i = 0; i < mask.length; i++) mask[i] = (below ? map[i] < t : map[i] > t) ? 1 : 0;
     mask = binaryMorph(binaryMorph(mask, w, h, true), w, h, false);
 
     const n = w * h;
@@ -331,7 +339,10 @@ function DetectModule(Geo, Imaging) {
     for (let i = 0; i < n; i++) P[i] = L[i] - 0.6 * satB[i];
     const { gx, gy, mag } = sobel(L, w, h);
     const gscale = Math.max(40, percentile(mag, 0.99));
-    return { w, h, L, P, gx, gy, mag, gscale, long: Math.max(w, h) };
+    // 模様の多さ（境目の強さを広くぼかしたもの）。文字を消した紙の中は滑らかなので、布の柄や木目の上でも紙を見分けやすい
+    const tr = Math.max(2, Math.round(Math.max(w, h) / 80));
+    const T = boxBlur(boxBlur(mag, w, h, tr), w, h, tr);
+    return { w, h, L, P, T, satB, gx, gy, mag, gscale, long: Math.max(w, h) };
   }
 
   // 法線 (nx, ny) の向きの勾配の大きさ。画像の外は -1
@@ -341,6 +352,49 @@ function DetectModule(Geo, Imaging) {
       if (xi < 1 || yi < 1 || xi >= w - 1 || yi >= h - 1) return -1;
       const i = yi * w + xi;
       return Math.abs(gx[i] * nx + gy[i] * ny);
+    };
+  }
+
+  // 法線 (nx, ny) とほぼ同じ向き（±14° 以内）の境目だけの強さ。辺の延長に同じ線が続いているかを見るのに使う
+  function alignedSampler({ w, h, gx, gy }) {
+    return (x, y, nx, ny) => {
+      const xi = Math.round(x - 0.5), yi = Math.round(y - 0.5);
+      if (xi < 1 || yi < 1 || xi >= w - 1 || yi >= h - 1) return -1;
+      const i = yi * w + xi;
+      const p = Math.abs(gx[i] * nx + gy[i] * ny);
+      return p * p >= 0.94 * (gx[i] * gx[i] + gy[i] * gy[i]) ? p : 0;
+    };
+  }
+
+  // 角らしさ。本物の書類の角は、2 本の辺の境目が角のすぐ近くまで続き、角の先では途切れる。
+  // 布の格子柄や机の線で作った四角形は、線が角の先まで続いたり、角の近くに境目がなかったりする。
+  // sd[i] は角 i から角 i+1 への辺: endA / endB は両端の近く、extA / extB は両端の先の強さ（-1 は画像の外）
+  function cornerFactor(sd) {
+    let sum = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = sd[(i + 3) % 4], b = sd[i]; // a は角 i で終わる辺、b は角 i から始まる辺
+      let e = 0, en = 0, x = 0, xn = 0;
+      if (!a.border) { if (a.endB >= 0) { e += a.endB; en++; } x += Math.max(0, a.extB); xn++; }
+      if (!b.border) { if (b.endA >= 0) { e += b.endA; en++; } x += Math.max(0, b.extA); xn++; }
+      e = en ? e / en : 0.8;
+      x = xn ? x / xn : 0;
+      sum += Math.min(1, Math.max(0, (e - 0.1) / 0.5)) * (1 - 0.85 * Math.min(1, Math.max(0, (x - 0.25) / 0.5)));
+    }
+    return 0.55 + 0.45 * (sum / 4);
+  }
+
+  // 辺から法線 (nx, ny) の向きに 3〜14 画素（長辺 480 のとき）離れた帯の明るさの平均。画像の外なら -1。
+  // 細い線（布の格子柄や罫線）の両側は帯で平均すると同じ明るさになり、紙と背景の境目だけが差として残る
+  function bandSampler(ctx) {
+    const lumAt = lumSampler(ctx);
+    const offs = [0.006, 0.0125, 0.021, 0.029].map((k) => Math.max(1.5, k * ctx.long));
+    return (x, y, nx, ny) => {
+      let s = 0, m = 0;
+      for (const d of offs) {
+        const v = lumAt(x + d * nx, y + d * ny);
+        if (v >= 0) { s += v; m++; }
+      }
+      return m ? s / m : -1;
     };
   }
 
@@ -375,7 +429,9 @@ function DetectModule(Geo, Imaging) {
     const { w, h, gscale } = ctx;
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
+    const aligned = alignedSampler(ctx);
     const lumAt = lumSampler(ctx);
+    const band = bandSampler(ctx);
     const onBorder = (P, Q) => {
       const e = 2.5;
       return (P[0] < e && Q[0] < e) || (P[1] < e && Q[1] < e) || (P[0] > w - e && Q[0] > w - e) || (P[1] > h - e && Q[1] > h - e);
@@ -384,10 +440,31 @@ function DetectModule(Geo, Imaging) {
     function side(P, Q, cx, cy) {
       const dx = Q[0] - P[0], dy = Q[1] - P[1];
       const len = Math.hypot(dx, dy);
-      if (len < 6) return { sup: 0, con: 0 };
+      if (len < 6) return { sup: 0, con: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
       if (onBorder(P, Q)) return { sup: 0.4, con: 0.04, border: true };
       let nx = -dy / len, ny = dx / len;
       if ((cx - (P[0] + Q[0]) / 2) * nx + (cy - (P[1] + Q[1]) / 2) * ny < 0) { nx = -nx; ny = -ny; }
+      // 辺の上の t0〜t1（0 が P、1 が Q）の境目の強さの平均。画像の外なら -1
+      const zone = (t0, t1, sampler) => {
+        const k = Math.max(3, Math.round((Math.abs(t1 - t0) * len) / 2));
+        let s = 0, m = 0;
+        for (let j = 0; j < k; j++) {
+          const t = t0 + ((t1 - t0) * (j + 0.5)) / k;
+          const x = P[0] + dx * t, y = P[1] + dy * t;
+          let best = -1;
+          for (let d = -2; d <= 2; d++) {
+            const g = sampler(x + d * nx, y + d * ny, nx, ny);
+            if (g > best) best = g;
+          }
+          if (best >= 0) { s += Math.min(1, best / strong); m++; }
+        }
+        return m >= 2 ? s / m : -1;
+      };
+      const near = 2 / len;
+      const ends = {
+        endA: zone(near, 0.07, grad), endB: zone(0.93, 1 - near, grad),
+        extA: zone(-0.15, -0.03, aligned), extB: zone(1.03, 1.15, aligned),
+      };
       const n = Math.max(12, Math.min(64, Math.round(len / 4)));
       let sup = 0, cin = 0, cout = 0, cc = 0;
       for (let k = 0; k < n; k++) {
@@ -399,31 +476,55 @@ function DetectModule(Geo, Imaging) {
           if (g > best) best = g;
         }
         sup += best < 0 ? 0.4 : Math.min(1, best / strong);
-        const li = lumAt(x + 4 * nx, y + 4 * ny), lo = lumAt(x - 4 * nx, y - 4 * ny);
+        const li = band(x, y, nx, ny), lo = band(x, y, -nx, -ny);
         if (li >= 0 && lo >= 0) { cin += li; cout += lo; cc++; }
       }
-      return { sup: sup / n, con: cc ? (cin - cout) / cc / 255 : 0 };
+      return { sup: sup / n, con: cc ? (cin - cout) / cc / 255 : 0, ...ends };
     }
 
-    // 内側が紙らしく、ほぼ同じ明るさで埋まっているか（柄の布や机の木目の四角を除く）
-    function uniformity(q) {
+    // 内側が紙らしいか。uni: ほぼ同じ明るさで埋まっている割合 / tex: 模様（布の柄や木目）が多い所の割合
+    const texThr = 0.1 * gscale;
+    function interior(q) {
       const H = Geo.homography([[0, 0], [1, 0], [1, 1], [0, 1]], q);
-      if (!H) return 0;
+      if (!H) return { uni: 0, tex: 1 };
       const vals = [];
-      for (let i = 1; i <= 7; i++) {
-        for (let j = 1; j <= 7; j++) {
-          const [x, y] = Geo.project(H, (i - 0.5) / 7 * 0.9 + 0.05, (j - 0.5) / 7 * 0.9 + 0.05);
+      let tex = 0, tn = 0;
+      for (let i = 1; i <= 8; i++) {
+        for (let j = 1; j <= 8; j++) {
+          const [x, y] = Geo.project(H, (i - 0.5) / 8 * 0.86 + 0.07, (j - 0.5) / 8 * 0.86 + 0.07);
           const v = lumAt(x, y);
-          if (v >= 0) vals.push(v);
+          if (v < 0) continue;
+          vals.push(v);
+          tn++;
+          if (ctx.T[Math.round(y - 0.5) * w + Math.round(x - 0.5)] > texThr) tex++;
         }
       }
-      if (vals.length < 10) return 0;
+      if (vals.length < 10) return { uni: 0, tex: 1, margin: 1 };
       const sorted = vals.slice().sort((a, b) => a - b);
       const med = sorted[(sorted.length / 2) | 0];
-      return vals.filter((v) => Math.abs(v - med) < 28).length / vals.length;
+      // 余白: 各辺のすぐ内側（3.5% と 6%）に境目がある割合。書類はふちの内側が無地の余白なので、
+      // 布の格子柄や机の模様で作った四角形（内側のふちにも柄がある）と見分けられる
+      const { mag } = ctx;
+      const edgeThr = 0.3 * gscale;
+      let mHit = 0, mN = 0;
+      for (const inset of [0.035, 0.06]) {
+        for (let k = 0; k < 12; k++) {
+          const t = 0.1 + (0.8 * (k + 0.5)) / 12;
+          for (const [u, v] of [[t, inset], [1 - inset, t], [t, 1 - inset], [inset, t]]) {
+            const [x, y] = Geo.project(H, u, v);
+            const xi = Math.round(x - 0.5), yi = Math.round(y - 0.5);
+            if (xi < 1 || yi < 1 || xi >= w - 1 || yi >= h - 1) continue;
+            const i = yi * w + xi;
+            mN++;
+            if (Math.max(mag[i], mag[i - 1], mag[i + 1], mag[i - w], mag[i + w]) > edgeThr) mHit++;
+          }
+        }
+      }
+      return { uni: vals.filter((v) => Math.abs(v - med) < 28).length / vals.length, tex: tex / tn, margin: mN ? mHit / mN : 0 };
     }
 
-    return function score(q) {
+    // explain に入れ物を渡すと、点数の内訳を書き込む（調べるとき用）
+    return function score(q, explain = null) {
       const area = Geo.area(q) / (w * h);
       if (area < 0.05 || !Geo.isConvex(q)) return 0;
       const dev = Math.max(...Geo.angles(q).map((a) => Math.abs(a - 90)));
@@ -441,9 +542,20 @@ function DetectModule(Geo, Imaging) {
       s *= con >= 0 ? 0.65 + 0.35 * Math.min(1, con / 0.12) : 0.65 - 0.25 * Math.min(1, -con / 0.12);
       s *= Math.min(1, Math.sqrt(area / 0.12)) * (0.9 + 0.1 * Math.min(1, area / 0.6));
       s *= 1 - 0.35 * (dev / 55) ** 2;
-      s *= 0.55 + 0.45 * Math.min(1, Math.max(0, (uniformity(q) - 0.35) / 0.35));
+      const inside = interior(q);
+      s *= 0.55 + 0.45 * Math.min(1, Math.max(0, (inside.uni - 0.35) / 0.35));
+      s *= 1 - 0.45 * Math.min(1, Math.max(0, (inside.margin - 0.08) / 0.25));
+      const corner = cornerFactor(sides);
+      s *= corner;
       s *= aspectFactor(q, w, h, aspect);
       s *= priorFactor(q, prior, ctx.long);
+      if (explain) {
+        const r2 = (v) => Math.round(v * 100) / 100;
+        Object.assign(explain, {
+          sup: sups.map(r2), con: r2(con), area: r2(area), dev: Math.round(dev), uni: r2(inside.uni), tex: r2(inside.tex), margin: r2(inside.margin), corner: r2(corner),
+          ends: sides.map((x) => (x.border ? 'border' : [x.endA, x.endB, x.extA, x.extB].map(r2).join('/'))), s: r2(s),
+        });
+      }
       return s;
     };
   }
@@ -452,7 +564,7 @@ function DetectModule(Geo, Imaging) {
 
   // 直線のうち画像の中を通る区間を 1 画素ずつたどり、
   // 「境目の強さ」と「法線の両側（±4 画素）の明るさ」の累積和を作る
-  function profileLine(l, ctx, strong, grad, lumAt) {
+  function profileLine(l, ctx, strong, grad, band, aligned) {
     const { w, h } = ctx;
     const px = l.c * l.rho, py = l.s * l.rho, dx = -l.s, dy = l.c;
     let t0 = -Infinity, t1 = Infinity;
@@ -467,26 +579,43 @@ function DetectModule(Geo, Imaging) {
     if (!(t1 - t0 > 3)) return null;
     const n = Math.floor(t1 - t0);
     const sup = new Float32Array(n + 1), plus = new Float32Array(n + 1), minus = new Float32Array(n + 1);
+    const ali = new Float32Array(n + 1); // 同じ向きの境目だけの強さ（辺の先に線が続くかを見る）
     for (let k = 0; k < n; k++) {
       const t = t0 + k + 0.5;
       const x = px + t * dx, y = py + t * dy;
-      let best = -1;
+      let best = -1, bestA = 0;
       for (let d = -2; d <= 2; d++) {
         const g = grad(x + d * l.c, y + d * l.s, l.c, l.s);
         if (g > best) best = g;
+        const a = aligned(x + d * l.c, y + d * l.s, l.c, l.s);
+        if (a > bestA) bestA = a;
       }
       sup[k + 1] = sup[k] + (best < 0 ? 0.4 : Math.min(1, best / strong));
-      const a = lumAt(x + 4 * l.c, y + 4 * l.s), b = lumAt(x - 4 * l.c, y - 4 * l.s);
+      ali[k + 1] = ali[k] + Math.min(1, bestA / strong);
+      const a = band(x, y, l.c, l.s), b = band(x, y, -l.c, -l.s);
       plus[k + 1] = plus[k] + (a >= 0 ? a : b >= 0 ? b : 0);
       minus[k + 1] = minus[k] + (b >= 0 ? b : a >= 0 ? a : 0);
     }
-    return { px, py, dx, dy, t0, n, sup, plus, minus };
+    return { px, py, dx, dy, t0, n, sup, ali, plus, minus };
+  }
+
+  // 累積和 arr の、位置 a〜b（向きは問わない）の 1 画素あたりの平均。画像の外にはみ出す分は除き、2 画素未満なら -1
+  function rangeAvg(arr, n, a, b) {
+    const i0 = Math.max(0, Math.floor(Math.min(a, b))), i1 = Math.min(n, Math.floor(Math.max(a, b)));
+    return i1 - i0 >= 2 ? (arr[i1] - arr[i0]) / (i1 - i0) : -1;
   }
 
   // 直線の上の A から B まで（両端の 7% を除く）の境目の強さと、両側の明るさの平均
+  // あわせて、A と B それぞれの近く（端から 7% まで）と、その先（3〜15%）の強さも out に入れる
   function segment(prof, A, B, out) {
     let ta = (A[0] - prof.px) * prof.dx + (A[1] - prof.py) * prof.dy - prof.t0;
     let tb = (B[0] - prof.px) * prof.dx + (B[1] - prof.py) * prof.dy - prof.t0;
+    const dir = tb >= ta ? 1 : -1;
+    const span0 = Math.abs(tb - ta);
+    out.endA = rangeAvg(prof.sup, prof.n, ta + dir * 2, ta + dir * 0.07 * span0);
+    out.endB = rangeAvg(prof.sup, prof.n, tb - dir * 2, tb - dir * 0.07 * span0);
+    out.extA = rangeAvg(prof.ali, prof.n, ta - dir * 0.03 * span0, ta - dir * 0.15 * span0);
+    out.extB = rangeAvg(prof.ali, prof.n, tb + dir * 0.03 * span0, tb + dir * 0.15 * span0);
     if (ta > tb) { const t = ta; ta = tb; tb = t; }
     const len = tb - ta;
     if (len < 6) return false;
@@ -506,9 +635,10 @@ function DetectModule(Geo, Imaging) {
   // 内側の均一さは見ないので、上位の候補だけを makeScorer で採点し直す
   function makeFastScorer(ctx, aspect, prior) {
     const { w, h } = ctx;
-    const seg = { sup: 0, valid: false, plus: 0, minus: 0 };
+    const seg = { sup: 0, valid: false, plus: 0, minus: 0, endA: 0, endB: 0, extA: 0, extB: 0 };
     const sides = [null, null, null, null];
     const pts = [null, null, null, null];
+    const sd = [0, 1, 2, 3].map(() => ({ border: false, endA: 0, endB: 0, extA: 0, extB: 0 }));
     return function fastScore(a1, a2, b1, b2) {
       const p0 = intersect(a1, b1), p1 = intersect(a1, b2), p2 = intersect(a2, b2), p3 = intersect(a2, b1);
       if (!p0 || !p1 || !p2 || !p3) return null;
@@ -534,11 +664,13 @@ function DetectModule(Geo, Imaging) {
       for (let i = 0; i < 4; i++) {
         const l = sides[i], A = pts[i], B = pts[(i + 1) % 4];
         let sup;
+        sd[i].border = !!l.border;
         if (l.border) {
           sup = 0.4;
         } else {
           if (!segment(l.prof, A, B, seg)) return null;
           sup = seg.sup;
+          sd[i].endA = seg.endA; sd[i].endB = seg.endB; sd[i].extA = seg.extA; sd[i].extB = seg.extB;
           if (seg.valid) {
             const inward = (cx - (A[0] + B[0]) / 2) * l.c + (cy - (A[1] + B[1]) / 2) * l.s > 0;
             con += ((inward ? seg.plus - seg.minus : seg.minus - seg.plus) / 255);
@@ -553,6 +685,7 @@ function DetectModule(Geo, Imaging) {
       s *= con >= 0 ? 0.65 + 0.35 * Math.min(1, con / 0.12) : 0.65 - 0.25 * Math.min(1, -con / 0.12);
       s *= Math.min(1, Math.sqrt(area / 0.12)) * (0.9 + 0.1 * Math.min(1, area / 0.6));
       s *= 1 - 0.35 * (dev / 55) ** 2;
+      s *= cornerFactor(sd);
       if (aspect || prior) {
         const oq = Geo.orderQuad(pts);
         s *= aspectFactor(oq, w, h, aspect) * priorFactor(oq, prior, ctx.long);
@@ -632,6 +765,65 @@ function DetectModule(Geo, Imaging) {
     });
   }
 
+  // 領域から作った四角形の辺を、「内側の帯（紙）と外側の帯（背景）の差がいちばん大きい位置」に合わせ直す。
+  // 境目の強さではなく広い帯の平均で比べるので、布の格子柄のような細かい線には引っぱられない
+  function regionRefine(q, ctx) {
+    const { w, h, L, satB } = ctx;
+    const r = Math.max(4, Math.round(ctx.long * 0.035));
+    const B = Math.max(4, Math.round(ctx.long * 0.05));
+    const at = (arr, x, y) => {
+      const xi = Math.round(x - 0.5), yi = Math.round(y - 0.5);
+      return xi < 0 || yi < 0 || xi >= w || yi >= h ? NaN : arr[yi * w + xi];
+    };
+    const cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+    const lines = [];
+    const span = r + B;
+    const prof = new Float32Array(2 * span + 1);
+    const ok = new Uint8Array(2 * span + 1);
+    for (let i = 0; i < 4; i++) {
+      const P = q[i], Q = q[(i + 1) % 4];
+      const dx = Q[0] - P[0], dy = Q[1] - P[1];
+      const len = Math.hypot(dx, dy) || 1;
+      let nx = -dy / len, ny = dx / len;
+      if ((cx - (P[0] + Q[0]) / 2) * nx + (cy - (P[1] + Q[1]) / 2) * ny < 0) { nx = -nx; ny = -ny; } // 内向き
+      const n = Math.max(12, Math.min(48, Math.round(len / 6)));
+      const pts = [];
+      for (let k = 0; k < n; k++) {
+        const t = 0.1 + (0.8 * (k + 0.5)) / n;
+        const x0 = P[0] + dx * t, y0 = P[1] + dy * t;
+        // 法線に沿って「紙らしさ」（明るさ − 彩度）を並べる
+        for (let d = -span; d <= span; d++) {
+          const l = at(L, x0 + d * nx, y0 + d * ny), sv = at(satB, x0 + d * nx, y0 + d * ny);
+          ok[d + span] = Number.isNaN(l) ? 0 : 1;
+          prof[d + span] = ok[d + span] ? l - 1.5 * sv : 0;
+        }
+        let best = 0, bd = null;
+        for (let d = -r; d <= r; d++) {
+          let si = 0, ni = 0, so = 0, no = 0;
+          for (let e = 2; e <= B; e++) {
+            const a = d + e + span, b = d - e + span;
+            if (ok[a]) { si += prof[a]; ni++; }
+            if (ok[b]) { so += prof[b]; no++; }
+          }
+          if (ni < B / 2 || no < B / 2) continue;
+          const diff = si / ni - so / no;
+          if (diff > best) { best = diff; bd = d; }
+        }
+        if (bd !== null && best > 6) pts.push([x0 + bd * nx, y0 + bd * ny]);
+      }
+      let line = null;
+      if (pts.length >= Math.max(6, n * 0.4)) {
+        const fit = fitLine(pts);
+        if (Math.abs(fit.c * nx + fit.s * ny) > 0.995) line = fit;
+      }
+      lines.push(line || { c: nx, s: ny, rho: nx * P[0] + ny * P[1] });
+    }
+    return q.map((p, i) => {
+      const c = intersect(lines[(i + 3) % 4], lines[i]);
+      return c && Geo.dist(c, p) < 0.08 * ctx.long ? c : p;
+    });
+  }
+
   function refine(q, ctx, r) {
     return refineWith(q, gradSampler(ctx), r, 0.25 * ctx.gscale, 0.04 * ctx.long);
   }
@@ -699,9 +891,11 @@ function DetectModule(Geo, Imaging) {
     const strong = 0.4 * gscale;
     const grad = gradSampler(ctx);
     const lumAt = lumSampler(ctx);
+    const aligned = alignedSampler(ctx);
+    const band = bandSampler(ctx);
     const edges = thinEdges(gx, gy, mag, w, h, 0.15 * gscale);
     const lines = houghLines(edges, gx, gy, w, h, quick ? 22 : 36, Math.max(12, Math.round(0.1 * ctx.long)))
-      .map((l) => ({ ...l, prof: profileLine(l, ctx, strong, grad, lumAt) }))
+      .map((l) => ({ ...l, prof: profileLine(l, ctx, strong, grad, band, aligned) }))
       .filter((l) => l.prof);
     mark('lines');
     lines.push(
@@ -746,6 +940,11 @@ function DetectModule(Geo, Imaging) {
 
     // b) 明るい紙の領域
     for (const q of regionQuads(ctx.P, w, h)) add(q, 'region');
+    // 模様の少ない塊（布の柄や木目の上に置いた紙）。塊のふちはぼかしの分ずれるので、帯の差で辺を合わせ直す
+    for (const q of regionQuads(ctx.T, w, h, 0.1 * gscale, true)) {
+      add(q, 'texture');
+      add(Geo.orderQuad(regionRefine(q, ctx)), 'texture+');
+    }
     if (!quick) for (const q of regionQuads(ctx.L, w, h)) add(q, 'region');
 
     mark('region');
@@ -801,9 +1000,12 @@ function DetectModule(Geo, Imaging) {
     if (debug) {
       result.debug = {
         size: [w, h],
+        lines: lines.filter((l) => !l.border).map((l) => ({ t: l.t, rho: l.rho, votes: l.votes })),
         unrefined: norm(best.raw || best.q),
         top: candidates.slice(0, 8).map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
+        regions: candidates.filter((c) => c.from !== 'lines').map((c) => ({ from: c.from, s: +c.s.toFixed(3), q: norm(c.q) })),
         scoreOf: (qn) => score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h]))),
+        explain: (qn) => { const ex = {}; score(Geo.orderQuad(qn.map(([x, y]) => [x * w, y * h])), ex); return ex; },
       };
     }
     return result;
