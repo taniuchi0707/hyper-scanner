@@ -108,7 +108,8 @@ try {
     const s = r.summary;
     const v = s.v2;
     console.log(`[${r.query || '既定'}] 場面 ${s.scenes} / 0.8%未満 ${pct(v.ok08)} / 0.3%未満 ${pct(v.ok03 || 0)} / 中央値 ${(v.median * 100).toFixed(3)}% / ${v.ms.toFixed(1)}ms`
-      + `  (前の版 ${pct(s.prev.ok08)} ${(s.prev.median * 100).toFixed(3)}%)  ${r.secs}s`);
+      + `  大外れ(5%超) ${r.rows.filter((row) => row.inside && !(row.v2 < 0.05)).length}`
+      + `  (前の版 ${pct(s.prev.ok08)} ${(s.prev.median * 100).toFixed(3)}% 大外れ ${r.rows.filter((row) => row.inside && !(row.prev < 0.05)).length})  ${r.secs}s`);
     if (r.rows[0] && r.rows[0].timing) {
       const sum = {};
       for (const row of r.rows) for (const [k, v] of Object.entries(row.timing)) sum[k] = (sum[k] || 0) + v;

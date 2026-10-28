@@ -391,6 +391,12 @@ function DetectModule(Geo, Imaging) {
     const P = new Float32Array(n);
     for (let i = 0; i < n; i++) P[i] = L[i] - 0.6 * satB[i];
     const { gx, gy, mag } = sobel(L, w, h);
+    // 模様の多さ（境目の強さを広くぼかしたもの）。文字を消した紙の中は滑らかなので、布の柄や木目の上でも紙を見分けやすい。
+    // 明るさの境目だけで、半分の大きさで求める（色の境目は、撮影中は文字も拾うので入れない）
+    const m2 = halve(mag, w, h);
+    const tr = Math.max(1, Math.round(Math.max(w, h) / 160));
+    const T = { map: boxBlur(boxBlur(m2.map, m2.w, m2.h, tr), m2.w, m2.h, tr), w: m2.w, h: m2.h };
+    const tThr = 0.1 * Math.max(40, percentile(mag, 0.99));
     if (chroma) {
       // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える。
       // chromaLite のときは閉じ処理を省いて軽くする（撮影中）
@@ -402,12 +408,7 @@ function DetectModule(Geo, Imaging) {
       }
     }
     const gscale = Math.max(40, percentile(mag, 0.99));
-    // 模様の多さ（境目の強さを広くぼかしたもの）。文字を消した紙の中は滑らかなので、布の柄や木目の上でも紙を見分けやすい
-    // （半分の大きさで求める）
-    const m2 = halve(mag, w, h);
-    const tr = Math.max(1, Math.round(Math.max(w, h) / 160));
-    const T = { map: boxBlur(boxBlur(m2.map, m2.w, m2.h, tr), m2.w, m2.h, tr), w: m2.w, h: m2.h };
-    return { w, h, L, P, T, satB, gx, gy, mag, gscale, long: Math.max(w, h) };
+    return { w, h, L, P, T, tThr, satB, gx, gy, mag, gscale, long: Math.max(w, h) };
   }
 
   // 法線 (nx, ny) の向きの勾配の大きさ。画像の外は -1
@@ -551,7 +552,7 @@ function DetectModule(Geo, Imaging) {
     }
 
     // 内側が紙らしいか。uni: ほぼ同じ明るさで埋まっている割合 / tex: 模様（布の柄や木目）が多い所の割合
-    const texThr = 0.1 * gscale;
+    const texThr = ctx.tThr;
     function interior(q) {
       const H = Geo.homography([[0, 0], [1, 0], [1, 1], [0, 1]], q);
       if (!H) return { uni: 0, tex: 1 };
@@ -979,7 +980,7 @@ function DetectModule(Geo, Imaging) {
     const regionsOf = (half, thr, below) => regionQuads(half.map, half.w, half.h, thr, below)
       .map((q) => q.map(([x, y]) => [(x * w) / half.w, (y * h) / half.h]));
     for (const q of regionsOf(halve(ctx.P, w, h))) regional.push([q, 'region']);
-    for (const q of regionsOf(ctx.T, 0.1 * gscale, true)) {
+    for (const q of regionsOf(ctx.T, ctx.tThr, true)) {
       regional.push([q, 'texture']);
       regional.push([Geo.orderQuad(regionRefine(q, ctx)), 'texture+']);
     }
