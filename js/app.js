@@ -97,6 +97,7 @@
   const shapeAspect = () => (SHAPES[state.settings.shape] || SHAPES.free).aspect;
 
   let BEAM = '#3CC8D4';
+  const WARN = '#F0AA3C'; // 書類がはみ出しているときの枠の色
   let overlay = null;
 
   // ---------- 小さな道具 ----------
@@ -528,9 +529,12 @@
       cam.stableSince = 0;
       cam.autoLock = null;
     }
+    // 書類のふちが画面の外に出ているときは知らせ、自動では撮らない（切れたまま撮らないように）
+    cam.clipped = !!cam.quad && cam.quad.some(([x, y]) => x < 0.012 || y < 0.012 || x > 0.988 || y > 0.988);
+    cam.small = !!cam.quad && Geo.area(cam.quad) < 0.1;
 
     const AUTO_WAIT = 1100;
-    if (state.settings.autoCapture && cam.quad && cam.stableSince && !cam.autoLock && !cam.busy) {
+    if (state.settings.autoCapture && cam.quad && cam.stableSince && !cam.autoLock && !cam.busy && !cam.clipped) {
       const p = (now - cam.stableSince) / AUTO_WAIT;
       setShutterProgress(p);
       if (p >= 1) {
@@ -579,7 +583,7 @@
     const dw = vw * s, dh = vh * s, ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
     const pts = cam.display ? cam.display.map(([x, y]) => [ox + x * dw, oy + y * dh]) : null;
     // 前と同じ絵になるときは描き直さない（枠が止まっている間は何もしない）
-    const key = [W, H, dw, dh, ox, oy, state.settings.autoCapture, !!cam.autoLock, pts ? pts.flat().map((v) => Math.round(v * 4)) : '']
+    const key = [W, H, dw, dh, ox, oy, state.settings.autoCapture, !!cam.autoLock, !!cam.clipped, !!cam.small, pts ? pts.flat().map((v) => Math.round(v * 4)) : '']
       .map((v) => (typeof v === 'number' ? Math.round(v) : String(v))).join('|');
     if (key === cam.drawn) return;
     cam.drawn = key;
@@ -593,14 +597,17 @@
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.closePath();
-      ctx.fillStyle = 'rgba(60, 200, 212, .16)';
+      const color = cam.clipped ? WARN : BEAM;
+      ctx.fillStyle = cam.clipped ? 'rgba(240, 170, 60, .16)' : 'rgba(60, 200, 212, .16)';
       ctx.fill();
       ctx.lineWidth = 2.5;
-      ctx.strokeStyle = BEAM;
+      ctx.strokeStyle = color;
       ctx.stroke();
-      ctx.fillStyle = BEAM;
+      ctx.fillStyle = color;
       pts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); });
-      setCamHint(state.settings.autoCapture && !cam.autoLock ? '書類を見つけました。そのまま動かさずに待つと撮影します' : '書類を見つけました。そのまま撮影できます', true);
+      if (cam.clipped) setCamHint('書類のふちが画面からはみ出しています。少し離してください', false);
+      else if (cam.small) setCamHint('もう少し近づくと、文字がくっきり撮れます', true);
+      else setCamHint(state.settings.autoCapture && !cam.autoLock ? '書類を見つけました。そのまま動かさずに待つと撮影します' : '書類を見つけました。そのまま撮影できます', true);
     } else {
       // 書類を探している間はトンボの枠を出す
       const m = 0.07;

@@ -25,17 +25,27 @@ function JobsModule(Geo, Imaging, Detect, Pdf) {
    * 撮った写真・取り込んだ画像を、保存用の JPEG・四隅・サムネイルにする
    * source: Blob か ImageBitmap（映像の1コマ） / ref: 向きをそろえる手本（映像の1コマを縮めたもの）
    */
-  async function ingest({ source, ref = null, hint = null, aspect = null, maxLong, detectLong, refineLong, thumbLong, filter = 'enhance', rotation = 0 }) {
+  async function ingest({ source, ref = null, hint = null, aspect = null, maxLong, detectLong, refineLong, thumbLong, filter = 'enhance', rotation = 0, timing = false }) {
+    const t = timing ? {} : null;
+    let last = Date.now();
+    const mark = (k) => { if (t) { const now = Date.now(); t[k] = now - last; last = now; } };
     const img = await Imaging.normalize(source, maxLong, ref);
     if (ref && ref.close) ref.close();
-    const found = Detect.find(img.canvas, { long: detectLong, aspect, refineLong });
+    // 四隅の検出（最後の合わせ直しは refineLong）とサムネイルは、refineLong の大きさに一度だけ縮めたものから作る
+    const k = Math.min(1, refineLong / Math.max(img.width, img.height));
+    const mid = k < 1 ? Imaging.scaleTo(img.canvas, Math.round(img.width * k), Math.round(img.height * k)) : img.canvas;
+    mark('normalize');
+    const found = Detect.find(mid, { long: detectLong, aspect, refineLong });
+    mark('detect');
     let quad = found && found.quad;
     if (!quad && hint && Math.abs(img.width / img.height - hint.ratio) < 0.02) quad = hint.quad;
     const detected = !!quad;
     if (!quad) quad = insetQuad();
-    const thumbCanvas = Imaging.render(img.canvas, { quad, aspect, filter, rotation }, thumbLong);
-    const thumb = await Imaging.toBlob(thumbCanvas, 'image/jpeg', 0.82);
-    return { original: img.blob, width: img.width, height: img.height, quad, detected, thumb, score: found ? found.score : 0 };
+    const thumbCanvas = Imaging.render(mid, { quad, aspect, filter, rotation }, thumbLong);
+    mark('thumb');
+    const [original, thumb] = await Promise.all([img.blob, Imaging.toBlob(thumbCanvas, 'image/jpeg', 0.82)]);
+    mark('encode');
+    return { original, width: img.width, height: img.height, quad, detected, thumb, score: found ? found.score : 0, timing: t };
   }
 
   async function detectPage({ key, blob, opts }) {

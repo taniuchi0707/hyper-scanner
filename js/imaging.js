@@ -171,7 +171,8 @@ function ImagingModule(Geo) {
     const s = Math.min(1, maxLong / Math.max(w, h));
     const canvas = scaleTo(img, Math.round(w * s), Math.round(h * s));
     if (decoded.close) decoded.close();
-    const blob = await toBlob(canvas, 'image/jpeg', 0.92);
+    // JPEG への書き出しはブラウザが裏で進めるので、待たずに返す（その間に四隅の検出などを進められる）
+    const blob = toBlob(canvas, 'image/jpeg', 0.92);
     return { blob, canvas, width: canvas.width, height: canvas.height };
   }
 
