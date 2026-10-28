@@ -247,8 +247,9 @@ WorkerMain(JobsModule(Geo, Imaging, Detect, Pdf), Detect, Imaging);
       return (await available()) ? call('heavy', 'thumb', payload) : local.thumb(payload);
     },
 
-    async render(payload) {
-      return (await available()) ? call('heavy', 'render', payload) : local.render(payload);
+    // lane: 使うワーカー（PDF の書き出しでは、撮影中の検出のワーカーも借りて 2 ページずつ進める）
+    async render(payload, lane = 'heavy') {
+      return (await available()) ? call(lane, 'render', payload) : local.render(payload);
     },
   };
 })();

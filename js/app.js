@@ -1260,14 +1260,22 @@
     state.exporting = true;
     setExportBusy(true);
     try {
-      const out = [];
-      for (let i = 0; i < n; i++) {
-        exportProgress(i, n, `${i + 1} / ${n} ページを補正しています`);
-        const p = pages[i];
-        // 補正・フィルター・画像の圧縮はワーカーで行う（画面は固まらない）
-        const img = await Engine.render({ blob: p.original, page: pageLook(p), maxLong, bitonal: p.filter === 'bw', quality: Q.jpeg });
-        out.push({ ...img, ...Pdf.layout(img.width, img.height, size) });
-      }
+      const out = new Array(n);
+      // 補正・フィルター・画像の圧縮はワーカーで行う（画面は固まらない）。
+      // コアとメモリに余裕のある端末では、ワーカー 2 つで 2 ページずつ進める（撮影中の検出のワーカーは書き出し中は空いている）
+      const lanes = (navigator.hardwareConcurrency || 2) >= 4 && (navigator.deviceMemory || 4) >= 4 ? ['heavy', 'live'] : ['heavy'];
+      let next = 0, done = 0;
+      exportProgress(0, n, `1 / ${n} ページを補正しています`);
+      await Promise.all(lanes.map(async (lane) => {
+        while (next < n) {
+          const i = next++;
+          const p = pages[i];
+          const img = await Engine.render({ blob: p.original, page: pageLook(p), maxLong, bitonal: p.filter === 'bw', quality: Q.jpeg }, lane);
+          out[i] = { ...img, ...Pdf.layout(img.width, img.height, size) };
+          done++;
+          if (done < n) exportProgress(done, n, `${done + 1} / ${n} ページを補正しています`);
+        }
+      }));
       exportProgress(n, n, 'PDF を組み立てています');
       const blob = Pdf.build(out, { title: state.title });
       state.pdf = { key, blob };
