@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>検出の速さの内訳</title>
+</head>
+<body>
+<pre id="out">測定中…</pre>
+<script src="../js/geometry.js"></script>
+<script src="../js/imaging.js"></script>
+<script src="../js/detect.js"></script>
+<script>
+// 検出の前処理と領域の処理を部品ごとに測る（開発用）。tests/run-bench.mjs から BENCH_BASE で開ける
+(async () => {
+  const P = Detect._parts;
+  const params = new URLSearchParams(location.search);
+  const long = Number(params.get('long')) || 480;
+  const W = long, H = Math.round(long * 0.75);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  x.fillStyle = '#e9edf2'; x.fillRect(0, 0, W, H);
+  x.fillStyle = 'rgba(60,90,150,.35)';
+  for (let i = 0; i < W; i += W / 20) x.fillRect(i, 0, W / 44, H);
+  for (let j = 0; j < H; j += W / 20) x.fillRect(0, j, W, W / 44);
+  x.save(); x.translate(W / 2, H / 2); x.rotate(0.25); x.fillStyle = '#f7f7f3'; x.fillRect(-W * 0.2, -H * 0.35, W * 0.4, H * 0.7);
+  x.fillStyle = '#222'; x.font = `${Math.round(W / 60)}px sans-serif`;
+  for (let i = 0; i < 20; i++) x.fillText('見積書 請求書 納品書 領収書 契約書', -W * 0.18, -H * 0.3 + i * H * 0.03);
+  x.restore();
+  const px = { data: x.getImageData(0, 0, W, H).data, w: W, h: H };
+  const N = 30;
+  const t = {};
+  const time = (k, f) => { const t0 = performance.now(); const r = f(); t[k] = (t[k] || 0) + performance.now() - t0; return r; };
+  for (let i = 0; i < N + 5; i++) {
+    if (i === 5) for (const k in t) t[k] = 0; // 最初の数回は JIT のため除く
+    const n = W * H;
+    const lum = new Float32Array(n);
+    time('blur1', () => P.boxBlur(lum, W, H, 1));
+    time('blur8', () => P.boxBlur(lum, W, H, 8));
+    time('closing', () => P.closing(lum, W, H, Math.max(2, Math.round(long / 160))));
+    time('sobel', () => P.sobel(lum, W, H));
+    const ctx = time('makeContext', () => P.makeContext(px));
+    time('percentile', () => P.percentile(ctx.mag, 0.99));
+    time("regionP", () => { const p = P.halve(ctx.P, W, H); return P.regionQuads(p.map, p.w, p.h); });
+    time("regionL", () => { const p = P.halve(ctx.L, W, H); return P.regionQuads(p.map, p.w, p.h); });
+    const tq = time("regionT", () => P.regionQuads(ctx.T.map, ctx.T.w, ctx.T.h, 0.1 * ctx.gscale, true).map((q) => q.map(([x, y]) => [x * 2, y * 2])));
+    time('regionRefine', () => tq.forEach((q) => P.regionRefine(q, ctx)));
+    const e = time('thinEdges', () => P.thinEdges(ctx.gx, ctx.gy, ctx.mag, W, H, 0.15 * ctx.gscale));
+    time('hough', () => P.houghLines(e, ctx.gx, ctx.gy, W, H, 36, Math.max(12, Math.round(0.1 * long))));
+    time('find', () => Detect.find(px, { long }));
+    time('findQuick', () => Detect.find(px, { long, quick: true }));
+  }
+  const res = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, +(v / N).toFixed(2)]));
+  document.getElementById('out').textContent = JSON.stringify(res, null, 1);
+  window.__bench = { profile: res, rows: [] };
+})();
+</script>
+</body>
+</html>

@@ -68,13 +68,41 @@ function DetectModule(Geo, Imaging) {
       core(w);
       for (let x = 0; x < w; x++) tmp[row + x] = res[x];
     }
-    for (let x = 0; x < w; x++) {
-      for (let y = 0; y < h; y++) pad[r + y] = tmp[y * w + x];
-      core(h);
-      for (let y = 0; y < h; y++) out[y * w + x] = sign * res[y];
+    // 縦方向は行ごとにまとめて処理する（列ごとに飛び飛びに読むより、ずっと速い）。
+    // 上下に r 行ずつ -∞ を足した (h + 2r) 行を k 行ずつの区切りに分け、区切りの中で前向き・後ろ向きの最大を取る
+    const mRows = h + 2 * r;
+    if (!vhgw || vhgw.G.length < mRows * w) vhgw = { G: new Float32Array(mRows * w), Hb: new Float32Array(mRows * w) };
+    const { G, Hb } = vhgw;
+    for (let s = 0; s < mRows; s += k) {
+      const e = s + k < mRows ? s + k : mRows;
+      for (let p = s; p < e; p++) {
+        const o = p * w, sr = p - r;
+        if (sr < 0 || sr >= h) {
+          if (p === s) G.fill(-Infinity, o, o + w); else G.copyWithin(o, o - w, o);
+        } else if (p === s) {
+          for (let x = 0; x < w; x++) G[o + x] = tmp[sr * w + x];
+        } else {
+          for (let x = 0, q = sr * w, b = o - w; x < w; x++) { const v = tmp[q + x], a = G[b + x]; G[o + x] = v > a ? v : a; }
+        }
+      }
+      for (let p = e - 1; p >= s; p--) {
+        const o = p * w, sr = p - r;
+        if (sr < 0 || sr >= h) {
+          if (p === e - 1) Hb.fill(-Infinity, o, o + w); else Hb.copyWithin(o, o + w, o + 2 * w);
+        } else if (p === e - 1) {
+          for (let x = 0; x < w; x++) Hb[o + x] = tmp[sr * w + x];
+        } else {
+          for (let x = 0, q = sr * w, b = o + w; x < w; x++) { const v = tmp[q + x], a = Hb[b + x]; Hb[o + x] = v > a ? v : a; }
+        }
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const a = y * w, b = (y + k - 1) * w;
+      for (let x = 0; x < w; x++) { const u = Hb[a + x], v = G[b + x]; out[a + x] = sign * (u > v ? u : v); }
     }
     return out;
   }
+  let vhgw = null; // 縦方向の作業用（使い回す）
 
   // 明るい紙の上の暗く細いもの（文字・罫線）を消す
   const closing = (src, w, h, r) => rankFilter(rankFilter(src, w, h, r, true), w, h, r, false);
@@ -83,24 +111,50 @@ function DetectModule(Geo, Imaging) {
     const tmp = new Float32Array(w * h);
     const out = new Float32Array(w * h);
     const win = 2 * r + 1;
+    const inv = 1 / win;
     for (let y = 0; y < h; y++) {
       const row = y * w;
       let acc = 0;
       for (let x = -r; x <= r; x++) acc += src[row + Math.min(w - 1, Math.max(0, x))];
-      for (let x = 0; x < w; x++) {
-        tmp[row + x] = acc / win;
+      // 端の近くだけ範囲の外を端の値で補い、中ほどは補わずに足し引きする
+      const x0 = Math.min(w, r), x1 = Math.max(x0, w - r - 1);
+      for (let x = 0; x < x0; x++) {
+        tmp[row + x] = acc * inv;
+        acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)];
+      }
+      for (let x = x0; x < x1; x++) {
+        tmp[row + x] = acc * inv;
+        acc += src[row + x + r + 1] - src[row + x - r];
+      }
+      for (let x = x1; x < w; x++) {
+        tmp[row + x] = acc * inv;
         acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)];
       }
     }
-    for (let x = 0; x < w; x++) {
-      let acc = 0;
-      for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
-      for (let y = 0; y < h; y++) {
-        out[y * w + x] = acc / win;
-        acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    // 縦方向は、列ごとの合計を行単位でまとめて更新する
+    const acc = new Float32Array(w);
+    for (let y = -r; y <= r; y++) {
+      const o = Math.min(h - 1, Math.max(0, y)) * w;
+      for (let x = 0; x < w; x++) acc[x] += tmp[o + x];
+    }
+    for (let y = 0; y < h; y++) {
+      const o = y * w, add = Math.min(h - 1, y + r + 1) * w, sub = Math.max(0, y - r) * w;
+      for (let x = 0; x < w; x++) {
+        out[o + x] = acc[x] * inv;
+        acc[x] += tmp[add + x] - tmp[sub + x];
       }
     }
     return out;
+  }
+  // 縦横半分に縮める（2×2 の平均）。領域の切り出しは大まかな位置がわかればよいので、半分の大きさで行う
+  function halve(src, w, h) {
+    const w2 = w >> 1, h2 = h >> 1;
+    const out = new Float32Array(w2 * h2);
+    for (let y = 0; y < h2; y++) {
+      const a = 2 * y * w, b = a + w, o = y * w2;
+      for (let x = 0; x < w2; x++) out[o + x] = (src[a + 2 * x] + src[a + 2 * x + 1] + src[b + 2 * x] + src[b + 2 * x + 1]) * 0.25;
+    }
+    return { map: out, w: w2, h: h2 };
   }
 
   function sobel(src, w, h) {
@@ -340,8 +394,10 @@ function DetectModule(Geo, Imaging) {
     const { gx, gy, mag } = sobel(L, w, h);
     const gscale = Math.max(40, percentile(mag, 0.99));
     // 模様の多さ（境目の強さを広くぼかしたもの）。文字を消した紙の中は滑らかなので、布の柄や木目の上でも紙を見分けやすい
-    const tr = Math.max(2, Math.round(Math.max(w, h) / 80));
-    const T = boxBlur(boxBlur(mag, w, h, tr), w, h, tr);
+    // （半分の大きさで求める）
+    const m2 = halve(mag, w, h);
+    const tr = Math.max(1, Math.round(Math.max(w, h) / 160));
+    const T = { map: boxBlur(boxBlur(m2.map, m2.w, m2.h, tr), m2.w, m2.h, tr), w: m2.w, h: m2.h };
     return { w, h, L, P, T, satB, gx, gy, mag, gscale, long: Math.max(w, h) };
   }
 
@@ -496,7 +552,8 @@ function DetectModule(Geo, Imaging) {
           if (v < 0) continue;
           vals.push(v);
           tn++;
-          if (ctx.T[Math.round(y - 0.5) * w + Math.round(x - 0.5)] > texThr) tex++;
+          const T = ctx.T;
+          if (T.map[Math.min(T.h - 1, Math.max(0, (y / 2) | 0)) * T.w + Math.min(T.w - 1, Math.max(0, (x / 2) | 0))] > texThr) tex++;
         }
       }
       if (vals.length < 10) return { uni: 0, tex: 1, margin: 1 };
@@ -866,7 +923,7 @@ function DetectModule(Geo, Imaging) {
    * opts.quick: 撮影中のように何度も呼ぶとき、合わせ直しを減らして軽くする
    * 戻り値: { quad: 正規化座標（0〜1）の四隅 [左上, 右上, 右下, 左下], score } か null
    */
-  function find(source, { long = 480, aspect = null, refine: doRefine = true, refineLong = 0, prior = null, quick = false, debug = false, timing = null } = {}) {
+  function find(source, { long = 480, aspect = null, refine: doRefine = true, refineLong = 0, prior = null, quick = false, debug = false, timing = null, exp = {} } = {}) {
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const mark = (name) => { if (timing) { const t = now(); timing[name] = (timing[name] || 0) + t - (timing._t || t); timing._t = t; } };
     mark('start');
@@ -898,6 +955,20 @@ function DetectModule(Geo, Imaging) {
       .map((l) => ({ ...l, prof: profileLine(l, ctx, strong, grad, band, aligned) }))
       .filter((l) => l.prof);
     mark('lines');
+
+    // b) 領域から作る四角形。明るい紙の塊と、模様の少ない塊（布の柄や木目の上に置いた紙）。
+    // 模様の塊のふちはぼかしの分ずれるので、帯の差で辺を合わせ直す
+    const regional = [];
+    const regionsOf = (half, thr, below) => regionQuads(half.map, half.w, half.h, thr, below)
+      .map((q) => q.map(([x, y]) => [(x * w) / half.w, (y * h) / half.h]));
+    for (const q of regionsOf(halve(ctx.P, w, h))) regional.push([q, 'region']);
+    for (const q of regionsOf(ctx.T, 0.1 * gscale, true)) {
+      regional.push([q, 'texture']);
+      regional.push([Geo.orderQuad(regionRefine(q, ctx)), 'texture+']);
+    }
+    if (!quick) for (const q of regionsOf(halve(ctx.L, w, h))) regional.push([q, 'region']);
+    for (const [q, from] of regional) add(q, from);
+    mark('region');
     lines.push(
       { c: 1, s: 0, rho: 0, t: 0, border: true },
       { c: 1, s: 0, rho: w, t: 0, border: true },
@@ -938,16 +1009,7 @@ function DetectModule(Geo, Imaging) {
       add([intersect(c.a1, c.b1), intersect(c.a1, c.b2), intersect(c.a2, c.b2), intersect(c.a2, c.b1)], 'lines');
     }
 
-    // b) 明るい紙の領域
-    for (const q of regionQuads(ctx.P, w, h)) add(q, 'region');
-    // 模様の少ない塊（布の柄や木目の上に置いた紙）。塊のふちはぼかしの分ずれるので、帯の差で辺を合わせ直す
-    for (const q of regionQuads(ctx.T, w, h, 0.1 * gscale, true)) {
-      add(q, 'texture');
-      add(Geo.orderQuad(regionRefine(q, ctx)), 'texture+');
-    }
-    if (!quick) for (const q of regionQuads(ctx.L, w, h)) add(q, 'region');
-
-    mark('region');
+    mark('score');
     if (!candidates.length) return null;
     candidates.sort((a, b) => b.s - a.s);
 
@@ -1017,7 +1079,8 @@ function DetectModule(Geo, Imaging) {
     return r ? r.quad : null;
   }
 
-  return { find, detect };
+  // _parts は速さを測るとき用
+  return { find, detect, _parts: { makeContext, halve, regionQuads, regionRefine, boxBlur, closing, sobel, percentile, thinEdges, houghLines } };
 }
 
 const Detect = DetectModule(Geo, Imaging);

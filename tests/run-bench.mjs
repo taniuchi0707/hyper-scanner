@@ -104,10 +104,16 @@ try {
   const pct = (x) => `${(x * 100).toFixed(1)}%`;
   for (const r of results) {
     if (r.error) { console.log(`${r.query}: ${r.error}`); continue; }
+    if (r.profile) { console.log(`[${r.query}] ${JSON.stringify(r.profile)}`); continue; }
     const s = r.summary;
     const v = s.v2;
     console.log(`[${r.query || '既定'}] 場面 ${s.scenes} / 0.8%未満 ${pct(v.ok08)} / 0.3%未満 ${pct(v.ok03 || 0)} / 中央値 ${(v.median * 100).toFixed(3)}% / ${v.ms.toFixed(1)}ms`
       + `  (前の版 ${pct(s.prev.ok08)} ${(s.prev.median * 100).toFixed(3)}%)  ${r.secs}s`);
+    if (r.rows[0] && r.rows[0].timing) {
+      const sum = {};
+      for (const row of r.rows) for (const [k, v] of Object.entries(row.timing)) sum[k] = (sum[k] || 0) + v;
+      console.log('  内訳(ms): ' + Object.entries(sum).map(([k, v]) => `${k} ${(v / r.rows.length).toFixed(1)}`).join(' / '));
+    }
     if (args.includes('--dump')) {
       for (const row of r.rows) {
         const { name, bg, kind, v2, score, gtScore, gtLines, nLines, top, gtExplain, bestExplain, regions } = row;

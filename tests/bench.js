@@ -190,14 +190,15 @@
     return { bmp, gt: Geo.orderQuad(q), W, H };
   }
 
-  function configs() {
+  // ?n=108 で場面を増やす（先頭の 54 場面は同じ）
+  function configs(count = 54) {
     const rnd = mulberry32(2026);
     const pick = (arr) => arr[(rnd() * arr.length) | 0];
     const between = (a, b) => a + rnd() * (b - a);
     const list = [];
     const bgs = ['woodDark', 'woodLight', 'gray', 'white', 'black', 'cloth', 'mat', 'blue', 'beige'];
     const kinds = ['text', 'table', 'dense', 'photo'];
-    for (let i = 0; i < 54; i++) {
+    for (let i = 0; i < count; i++) {
       const hard = i % 3 === 2;
       const aspect = i % 9 === 4 ? 2.6 : i % 9 === 7 ? 1.294 : 1.4142;
       list.push({
@@ -264,7 +265,7 @@
   const only = params.get('only');
   // ?fill=0.7-0.92 で、書類が画面に占める割合を変える（スマホでは画面いっぱいに撮ることが多い）
   const fillRange = (params.get('fill') || '').split('-').map(Number);
-  const list = configs()
+  const list = configs(Number(params.get('n')) || 54)
     .map((c, i) => (fillRange.length === 2 && fillRange.every(Number.isFinite)
       ? { ...c, fill: fillRange[0] + ((i * 0.618) % 1) * (fillRange[1] - fillRange[0]) }
       : c))
@@ -291,7 +292,10 @@
     t0 = performance.now();
     if (yuv === 'canvas') source = frame;
     else if (frame) source = await Imaging.framePixels(frame, long);
-    const found = Detect.find(source, { long, aspect: aspectOpt, quick, refineLong: Number(params.get('refine')) || 0, debug: !!only });
+    // ?exp=a,b で、検出の試験中の切り替え（exp.a = true）を渡す
+    const exp = Object.fromEntries((params.get('exp') || '').split(',').filter(Boolean).map((k) => [k, true]));
+    const timing = params.get('timing') ? {} : null;
+    const found = Detect.find(source, { long, aspect: aspectOpt, quick, exp, timing, refineLong: Number(params.get('refine')) || 0, debug: !!only });
     const t2 = performance.now() - t0;
     if (frame) frame.close();
     const v2 = evaluate(found && found.quad, scene.gt, scene.W, scene.H);
@@ -333,6 +337,7 @@
       row.nLines = found.debug.lines.length;
       row.cornerErr = v2.q ? v2.q.map((p, k) => Math.round(Geo.dist(p, scene.gt[k]))) : null;
     }
+    if (timing) { delete timing._t; row.timing = timing; }
     rows.push(row);
 
     const fig = document.createElement('figure');
