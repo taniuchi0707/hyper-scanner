@@ -244,6 +244,28 @@
       x2.drawImage(c, 0, 0);
       cx.drawImage(c2, 0, 0);
     }
+    if (params.get('real')) {
+      // ?real=1: 暗い部屋（暗く、ざらつく）と、手ぶれ・ピンぼけ（強いぼかし）も 2 割ずつ混ぜる
+      const er = mulberry32(seed + 33);
+      if (er() < 0.2) {
+        const c2 = document.createElement('canvas');
+        c2.width = W; c2.height = H;
+        const x2 = c2.getContext('2d');
+        x2.filter = `blur(${(2.5 + er() * 2).toFixed(1)}px)`;
+        x2.drawImage(c, 0, 0);
+        cx.drawImage(c2, 0, 0);
+      }
+      if (er() < 0.2) {
+        const id = cx.getImageData(0, 0, W, H), dd2 = id.data;
+        const k = 0.35 + er() * 0.2, sigma = 12 + er() * 10;
+        const nr = mulberry32(seed + 34);
+        for (let j = 0; j < dd2.length; j += 4) {
+          const e = (nr() + nr() + nr() - 1.5) * sigma;
+          dd2[j] = dd2[j] * k + e; dd2[j + 1] = dd2[j + 1] * k + e * 0.9; dd2[j + 2] = dd2[j + 2] * k + e * 1.1;
+        }
+        cx.putImageData(id, 0, 0);
+      }
+    }
     const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
     const bmp = await createImageBitmap(blob);
     return { bmp, gt: Geo.orderQuad(q), W, H };
