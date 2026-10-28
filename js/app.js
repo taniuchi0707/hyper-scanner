@@ -416,6 +416,7 @@
     video.onresize = updateCamRes; // 撮る瞬間だけ映像を大きくしたあとも、表示を今の大きさに合わせる
     $('cam-gallery').hidden = !!replaceId;
     $('cam-shutter').disabled = false;
+    $('cam-shutter').classList.remove('busy');
     $('cam-auto').setAttribute('aria-pressed', String(state.settings.autoCapture));
     setShutterProgress(0);
     $('camera').hidden = false;
@@ -645,6 +646,7 @@
     const video = $('cam-video');
     if (!cam || cam.busy || !video.videoWidth) return;
     cam.busy = true;
+    $('cam-shutter').classList.add('busy'); // 写真の処理中はシャッターの周りを回す（映像が一瞬止まっても、撮影中だとわかるように）
     $('cam-shutter').disabled = true;
     const flash = $('cam-flash');
     flash.classList.remove('on');
@@ -678,6 +680,7 @@
       }
     }
     cam.busy = false;
+    $('cam-shutter').classList.remove('busy');
     if (state.camera === cam) $('cam-shutter').disabled = false;
     if (!source) { toast('撮影できませんでした。もう一度押してください'); return; }
 
