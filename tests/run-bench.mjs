@@ -119,6 +119,14 @@ try {
     console.log(`[${r.query || '既定'}] 場面 ${s.scenes} / 0.8%未満 ${pct(v.ok08)} / 0.3%未満 ${pct(v.ok03 || 0)} / 中央値 ${(v.median * 100).toFixed(3)}% / ${v.ms.toFixed(1)}ms`
       + `  大外れ(5%超) ${r.rows.filter((row) => row.inside && !(row.v2 < 0.05)).length}`
       + `  (前の版 ${pct(s.prev.ok08)} ${(s.prev.median * 100).toFixed(3)}% 大外れ ${r.rows.filter((row) => row.inside && !(row.prev < 0.05)).length})  ${r.secs}s`);
+    if (r.rows[0] && r.rows[0].trackMs !== undefined) {
+      const inside = r.rows.filter((row) => row.inside);
+      const ok = inside.filter((row) => row.v2 < 0.008);
+      const med = (arr) => { const s = arr.slice().sort((p, q) => p - q); return s[s.length >> 1]; };
+      const tr = ok.filter((row) => row.tracked);
+      console.log(`  追いかけ: 正しく見つかる ${ok.length} 場面のうち、近くから追いかけて受け入れた ${tr.length}（ずれ 0.8% 未満 ${tr.filter((row) => row.trackErr < 0.008).length}、中央値 ${(med(tr.map((row) => row.trackErr)) * 100).toFixed(3)}%、${med(tr.map((row) => row.trackMs)).toFixed(1)}ms）`
+        + ` / 10% ずれた位置を誤って受け入れた ${inside.filter((row) => row.farTracked && !(row.farErr < 0.008)).length} 場面`);
+    }
     if (args.includes('--scores')) {
       // 自動撮影のしきい値（0.6）と、枠を出すしきい値（0.35）に対する点数の分かれ方
       const inside = r.rows.filter((row) => row.inside);

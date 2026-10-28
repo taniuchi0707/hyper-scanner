@@ -493,11 +493,15 @@
       if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
       const started = performance.now();
       const long = cam.slow ? LIVE_LONG_SLOW : LIVE_LONG;
+      // 書類を見つけ続けている間は、4 回に 3 回は直前の位置を確かめるだけにして軽くする（4 回に 1 回は画面全体を探す）。
+      // 別の場所の候補が出ているときは、それを確かめるため画面全体を探す
+      cam.frames = (cam.frames || 0) + 1;
+      const track = !!cam.quad && !cam.jump && cam.frames % 4 !== 0;
       const frame = await liveFrame(video, direct, long);
       let found = null;
       if (frame) {
         try {
-          found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true });
+          found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true, track });
           directFails = 0;
         } catch (e) {
           found = null;

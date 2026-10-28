@@ -510,6 +510,23 @@
       }
       row.cornerErr = v2.q ? v2.q.map((p, k) => Math.round(Geo.dist(p, scene.gt[k]))) : null;
     }
+    if (params.get('track')) {
+      // ?track=1: 撮影中の「追いかけ」。正解の近く（±0.5%）を直前の位置として渡したときのずれと、
+      // 10% ずらした位置を渡したときに、誤って受け入れてしまうか
+      const tr = mulberry32(cfg.seed + 5);
+      const gtN = scene.gt.map(([x, y]) => [x / scene.W, y / scene.H]);
+      const near = gtN.map(([x, y]) => [x + (tr() - 0.5) * 0.01, y + (tr() - 0.5) * 0.01]);
+      const t0 = performance.now();
+      const a = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: near, track: true });
+      row.trackMs = performance.now() - t0;
+      row.tracked = !!(a && a.tracked);
+      row.trackErr = evaluate(a && a.quad, scene.gt, scene.W, scene.H).err;
+      const ang = tr() * Math.PI * 2;
+      const far = gtN.map(([x, y]) => [x + Math.cos(ang) * 0.1, y + Math.sin(ang) * 0.1]);
+      const f = Detect.find(source, { long, aspect: aspectOpt, quick: true, prior: far, track: true });
+      row.farTracked = !!(f && f.tracked);
+      row.farErr = evaluate(f && f.quad, scene.gt, scene.W, scene.H).err;
+    }
     if (timing) { delete timing._t; row.timing = timing; }
     rows.push(row);
 

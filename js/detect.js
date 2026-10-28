@@ -1047,6 +1047,19 @@ function DetectModule(Geo, Imaging) {
     const borderSup = 0.4;
     const center = 0.25; // 画面の中ほどを選びやすくする強さ（四隅の近くで最大 25% 下げる）
     const score = makeScorer(ctx, aspect, priorPx, cornerMix, borderSup, center);
+
+    // 追いかけ: 撮影中に書類を見つけ続けているときは、直前の位置だけを合わせ直して確かめる（画面全体は探さない）。
+    // 点が十分に高ければそれを返し、低ければふつうに探す
+    if (opts.track && priorPx) {
+      const wide = Math.max(4, Math.round(ctx.long / 60)), narrow = Math.max(3, Math.round(ctx.long / 120));
+      const tq = Geo.orderQuad(refine(Geo.orderQuad(refine(priorPx, ctx, wide)), ctx, narrow));
+      const ts = Geo.isConvex(tq) ? score(tq) : 0;
+      mark('track');
+      if (ts >= (opts.trackMin || 0.55)) {
+        return { quad: tq.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]), score: ts, tracked: true };
+      }
+    }
+
     const candidates = [];
     const add = (q, from) => {
       if (!q || q.some((p) => !p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return;
