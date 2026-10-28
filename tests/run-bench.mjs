@@ -110,6 +110,14 @@ try {
     console.log(`[${r.query || '既定'}] 場面 ${s.scenes} / 0.8%未満 ${pct(v.ok08)} / 0.3%未満 ${pct(v.ok03 || 0)} / 中央値 ${(v.median * 100).toFixed(3)}% / ${v.ms.toFixed(1)}ms`
       + `  大外れ(5%超) ${r.rows.filter((row) => row.inside && !(row.v2 < 0.05)).length}`
       + `  (前の版 ${pct(s.prev.ok08)} ${(s.prev.median * 100).toFixed(3)}% 大外れ ${r.rows.filter((row) => row.inside && !(row.prev < 0.05)).length})  ${r.secs}s`);
+    if (args.includes('--scores')) {
+      // 自動撮影のしきい値（0.6）と、枠を出すしきい値（0.35）に対する点数の分かれ方
+      const inside = r.rows.filter((row) => row.inside);
+      const ok = inside.filter((row) => row.v2 < 0.008), bad = inside.filter((row) => !(row.v2 < 0.008));
+      const frac = (list, f) => list.length ? (list.filter(f).length / list.length * 100).toFixed(0) + '%' : '-';
+      const q = (list) => { const s = list.map((row) => row.score).sort((a, b) => a - b); return s.length ? [0.1, 0.25, 0.5].map((p) => s[Math.floor(p * (s.length - 1))].toFixed(2)).join('/') : '-'; };
+      console.log(`  点数: 正解 ${ok.length} 件のうち 0.6 以上 ${frac(ok, (row) => row.score >= 0.6)}、0.35 以上 ${frac(ok, (row) => row.score >= 0.35)}（10/25/50% 点 ${q(ok)}） / 外れ ${bad.length} 件のうち 0.6 以上 ${frac(bad, (row) => row.score >= 0.6)}`);
+    }
     if (r.rows[0] && r.rows[0].timing) {
       const sum = {};
       for (const row of r.rows) for (const [k, v] of Object.entries(row.timing)) sum[k] = (sum[k] || 0) + v;
