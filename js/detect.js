@@ -981,6 +981,31 @@ function DetectModule(Geo, Imaging) {
     return q.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]);
   }
 
+  // 画面の中ほど（書類があることが多い）が、まわりより明らかに暗ければ、地の色が濃い書類とみなす
+  // （文字や写真に引っぱられないよう、平均ではなく真ん中の値で比べる）
+  function darkDocument({ data, w, h }) {
+    const center = [], outer = [];
+    const step = Math.max(1, Math.round(Math.max(w, h) / 120));
+    for (let y = 0; y < h; y += step) {
+      const ny = Math.abs(y / h - 0.5);
+      for (let x = 0; x < w; x += step) {
+        const nx = Math.abs(x / w - 0.5);
+        const j = (y * w + x) * 4;
+        const l = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
+        if (nx < 0.22 && ny < 0.22) center.push(l); else if (nx > 0.4 || ny > 0.4) outer.push(l);
+      }
+    }
+    if (!center.length || !outer.length) return false;
+    const med = (a) => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
+    return med(center) < med(outer) - 50;
+  }
+
+  function invertPixels({ data, w, h }) {
+    const out = new Uint8ClampedArray(data.length);
+    for (let j = 0; j < data.length; j += 4) { out[j] = 255 - data[j]; out[j + 1] = 255 - data[j + 1]; out[j + 2] = 255 - data[j + 2]; out[j + 3] = 255; }
+    return { data: out, w, h };
+  }
+
   // ---------- まとめ ----------
 
   /**
@@ -992,13 +1017,22 @@ function DetectModule(Geo, Imaging) {
    * opts.quick: 撮影中のように何度も呼ぶとき、合わせ直しを減らして軽くする
    * 戻り値: { quad: 正規化座標（0〜1）の四隅 [左上, 右上, 右下, 左下], score } か null
    */
-  function find(source, { long = 480, aspect = null, refine: doRefine = true, refineLong = 0, prior = null, quick = false, debug = false, timing = null, exp = {} } = {}) {
+  function find(source, opts = {}) {
+    const { long = 480, aspect = null, refine: doRefine = true, refineLong = 0, prior = null, quick = false, debug = false, timing = null, exp = {}, invert } = opts;
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const mark = (name) => { if (timing) { const t = now(); timing[name] = (timing[name] || 0) + t - (timing._t || t); timing._t = t; } };
     mark('start');
-    const px = pixelsOf(source, long);
+    let px = pixelsOf(source, long);
     if (!px) return null;
     mark('pixels');
+    // 地の色が濃い書類（紺の名刺など、明るい文字）かもしれないときは、明るさを反転して「明るい紙に暗い文字」としても探し、
+    // 点の高いほうを使う（白い机の上の写真入りの書類のように、真ん中が暗くても白い書類のことがあるので、両方を比べる）
+    if (invert === undefined && !exp.nodark && darkDocument(px)) {
+      const a = find(source, { ...opts, invert: false });
+      const b = find(source, { ...opts, invert: true });
+      return !a ? b : !b ? a : b.score > a.score ? b : a;
+    }
+    if (invert) px = invertPixels(px);
     // 色の境目も使う（撮影中は軽さを優先して、彩度の閉じ処理を省く）
     const ctx = makeContext(px, 1, quick);
     mark('prepare');

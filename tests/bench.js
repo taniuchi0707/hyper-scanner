@@ -181,6 +181,17 @@
     }
 
     const doc = drawDoc(rnd, cfg.aspect, cfg.paper, cfg.kind);
+    if (params.get('darkdoc')) {
+      // ?darkdoc=1: 色の濃い書類（紺色の名刺やチラシのように、地が暗く文字が明るい）
+      const dx = doc.getContext('2d');
+      const id = dx.getImageData(0, 0, doc.width, doc.height), dd0 = id.data;
+      for (let j = 0; j < dd0.length; j += 4) {
+        dd0[j] = (40 + (255 - dd0[j]) * 0.7) * 0.85;
+        dd0[j + 1] = (40 + (255 - dd0[j + 1]) * 0.7) * 0.95;
+        dd0[j + 2] = (40 + (255 - dd0[j + 2]) * 0.7) * 1.3;
+      }
+      dx.putImageData(id, 0, 0);
+    }
     const dw = doc.width, dh = doc.height;
     const dd = doc.getContext('2d').getImageData(0, 0, dw, dh).data;
     const img = bx.getImageData(0, 0, W, H);
