@@ -1061,8 +1061,8 @@ function DetectModule(Geo, Imaging) {
     candidates.sort((a, b) => b.s - a.s);
 
     // 上位の候補は、辺を境目に合わせ直してから比べ直す
-    // （撮影中の quick では、上位 6 件だけにして軽くする）
-    const top = candidates.slice(0, doRefine ? (quick ? 6 : 8) : 1).map((c) => {
+    // （撮影中の quick は 10 件。合わせ直す前は点の低い、指で一部が隠れた書類も拾えるように）
+    const top = candidates.slice(0, doRefine ? (quick ? 10 : 8) : 1).map((c) => {
       if (!doRefine) return c;
       // 広めに探して大きなずれを直し、狭く探して細かく合わせる
       const wide = Math.max(4, Math.round(ctx.long / 60));
