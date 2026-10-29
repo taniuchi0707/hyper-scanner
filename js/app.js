@@ -691,11 +691,20 @@
     let source = frame, ref = null;
     let photo = null;
     if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
+      const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : {};
+      if (cam.flashOff) settings.fillLightMode = 'off';
       try {
-        const settings = cam.photoSize ? { imageWidth: cam.photoSize.w, imageHeight: cam.photoSize.h } : {};
-        if (cam.flashOff) settings.fillLightMode = 'off';
         photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000);
       } catch (e) {
+        photo = null;
+      }
+      if (!photo && settings.fillLightMode) {
+        // フラッシュの指定を受け付けない端末のために、指定なしでもう一度だけ試す
+        cam.flashOff = false;
+        delete settings.fillLightMode;
+        try { photo = await withTimeout(cam.imageCapture.takePhoto(settings), 4000); } catch (e) { photo = null; }
+      }
+      if (!photo) {
         cam.photoFailed = true; // 次からは待たずに、撮る瞬間だけ大きくした映像で撮る
         updateCamRes();
       }
