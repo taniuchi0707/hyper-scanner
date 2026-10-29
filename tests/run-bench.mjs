@@ -130,6 +130,17 @@ try {
       console.log(`  追いかけ: 正しく見つかる ${ok.length} 場面のうち、近くから追いかけて受け入れた ${tr.length}（ずれ 0.8% 未満 ${tr.filter((row) => row.trackErr < 0.008).length}、中央値 ${(med(tr.map((row) => row.trackErr)) * 100).toFixed(3)}%、${med(tr.map((row) => row.trackMs)).toFixed(1)}ms）`
         + ` / 10% ずれた位置を誤って受け入れた ${inside.filter((row) => row.farTracked && !(row.farErr < 0.008)).length} 場面`);
     }
+    if (args.includes('--bybg')) {
+      // 背景ごと・書類の種類ごとの正解率
+      const inside = r.rows.filter((row) => row.inside);
+      const group = (key) => {
+        const m = {};
+        for (const row of inside) { const k = row[key]; m[k] = m[k] || [0, 0]; m[k][1]++; if (row.v2 < 0.008) m[k][0]++; }
+        return Object.entries(m).map(([k, [ok, n]]) => `${k} ${ok}/${n}`).join('  ');
+      };
+      console.log('  背景: ' + group('bg'));
+      console.log('  種類: ' + group('kind'));
+    }
     if (args.includes('--scores')) {
       // 自動撮影のしきい値（0.6）と、枠を出すしきい値（0.35）に対する点数の分かれ方
       const inside = r.rows.filter((row) => row.inside);
