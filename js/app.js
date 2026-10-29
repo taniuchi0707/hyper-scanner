@@ -520,7 +520,8 @@
       let found = null;
       if (frame) {
         try {
-          found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true, track });
+          // 地の色が濃い書類を追いかけている間は、反転した画像だけで確かめる（2 通りの確かめを 1 通りにする）
+          found = await Engine.detectLive(frame, { long, aspect: shapeAspect(), prior: cam.quad, quick: true, track, ...(track && cam.dark ? { invert: true } : {}) });
           directFails = 0;
         } catch (e) {
           found = null;
@@ -557,6 +558,7 @@
     }
     if (found && found.score >= SHOW_SCORE) {
       const q = found.quad;
+      cam.dark = !!found.dark;
       const prev = cam.quad;
       const moved = prev ? quadMove(prev, q) : 1;
       // 枠の描画でもなめらかにするので、ここでは軽くならすだけにする

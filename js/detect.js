@@ -1103,7 +1103,6 @@ function DetectModule(Geo, Imaging) {
       }));
       const wraps = a && b && b.score >= 0.3 && b.score >= a.score * 0.6 && Geo.area(b.quad) > Geo.area(a.quad) * 1.15 && within(a.quad, b.quad);
       const r = !a ? b : !b ? a : wraps || b.score > a.score ? b : a;
-      if (r && r === b) r.dark = true; // 地の色が濃い書類（仕上げを「カラー」から始めるときの目印）
       return r;
     }
     if (invert) px = invertPixels(px);
@@ -1130,7 +1129,7 @@ function DetectModule(Geo, Imaging) {
       const ts = Geo.isConvex(tq) ? score(tq) : 0;
       mark('track');
       if (ts >= (opts.trackMin || 0.55)) {
-        return { quad: tq.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]), score: ts, tracked: true };
+        return { quad: tq.map(([x, y]) => [Math.min(1, Math.max(0, x / w)), Math.min(1, Math.max(0, y / h))]), score: ts, tracked: true, dark: !!invert };
       }
     }
 
@@ -1271,6 +1270,8 @@ function DetectModule(Geo, Imaging) {
     if (refineLong > long) quad = refineFine(source, quad, refineLong, 0.3) || quad;
     mark('fine');
     const result = { quad, score: best.s };
+    // 反転した画像で見つけた地の色が濃い書類（仕上げを「カラー」から始めるときと、撮影中に追いかけるときの目印）
+    if (invert) result.dark = true;
     if (debug) {
       result.debug = {
         size: [w, h],
