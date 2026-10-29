@@ -808,7 +808,7 @@
     const parts = [];
     if (video.videoWidth) parts.push(`映像 ${video.videoWidth}×${video.videoHeight}`);
     if (cam.photoSize && !cam.photoFailed) parts.push(`写真 ${cam.photoSize.w}×${cam.photoSize.h}`);
-    else if (cam.largeSize) parts.push(`撮影 ${cam.largeSize.w}×${cam.largeSize.h}`);
+    else if (cam.largeSize) parts.push(`撮影時 ${cam.largeSize.w}×${cam.largeSize.h}`);
     $('cam-res').textContent = parts.join(' ・ ');
   }
 
