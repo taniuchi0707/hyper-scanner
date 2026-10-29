@@ -1103,7 +1103,9 @@ function DetectModule(Geo, Imaging) {
         return (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) >= -0.01 * Math.hypot(x1 - x0, y1 - y0);
       }));
       const wraps = a && b && b.score >= 0.3 && b.score >= a.score * 0.6 && Geo.area(b.quad) > Geo.area(a.quad) * 1.15 && within(a.quad, b.quad);
-      const r = !a ? b : !b ? a : wraps || b.score > a.score ? b : a;
+      // 逆に、反転した画像が書類の中のくっきりした四角形を選び、反転しない画像でそれを囲む四角形が見つかったときは、そちらを選ぶ
+      const unwraps = a && b && a.score >= 0.3 && a.score >= b.score * 0.6 && Geo.area(a.quad) > Geo.area(b.quad) * 1.15 && within(b.quad, a.quad);
+      const r = !a ? b : !b ? a : wraps ? b : unwraps ? a : b.score > a.score ? b : a;
       return r;
     }
     if (invert) px = invertPixels(px);
