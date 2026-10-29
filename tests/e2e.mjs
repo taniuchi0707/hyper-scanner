@@ -70,7 +70,7 @@ try {
 
   // 代わりのカメラを差し込み、撮影画面を開く
   await page.run(`
-    await new Promise((r, j) => { const s = document.createElement('script'); s.src = '/tests/camera-load.js?' + Date.now(); s.onload = r; s.onerror = j; document.head.appendChild(s); });
+    await new Promise((r, j) => { const s = document.createElement('script'); s.src = new URL('tests/camera-load.js?' + Date.now(), location.href).href; s.onload = r; s.onerror = j; document.head.appendChild(s); });
     await __cameraLoad.install();
     window.__log = [];
     const orig = Engine.detectLive;
@@ -141,7 +141,7 @@ try {
   await page.send('Page.navigate', { url: `${BASE}?e2e=slow${Date.now()}` });
   await sleep(2000);
   const slow = await page.run(`
-    await new Promise((r, j) => { const s = document.createElement('script'); s.src = '/tests/camera-load.js?' + Date.now(); s.onload = r; s.onerror = j; document.head.appendChild(s); });
+    await new Promise((r, j) => { const s = document.createElement('script'); s.src = new URL('tests/camera-load.js?' + Date.now(), location.href).href; s.onload = r; s.onerror = j; document.head.appendChild(s); });
     await __cameraLoad.install({ fps: 10 });
     document.getElementById('file-camera').click();
     await new Promise((r) => setTimeout(r, 6000));
