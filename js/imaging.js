@@ -151,7 +151,8 @@ function ImagingModule(Geo) {
     const s = Math.min(1, long / Math.max(W, H));
     const w = Math.max(32, Math.round(W * s)), h = Math.max(32, Math.round(H * s));
     let src = frame;
-    try { src = await createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }); } catch (e) { src = frame; }
+    // 縮め方は medium（high と検出の精度は同じで、少し速い）
+    try { src = await createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'medium' }); } catch (e) { src = frame; }
     if (!frameCanvas || frameCanvas.width !== w || frameCanvas.height !== h) frameCanvas = makeCanvas(w, h);
     const x = ctx2d(frameCanvas);
     x.imageSmoothingQuality = 'high';
