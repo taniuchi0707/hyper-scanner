@@ -380,6 +380,155 @@
     return new VideoFrame(buf, { format: 'NV12', codedWidth: W, codedHeight: H, timestamp: 0, colorSpace: { matrix: 'smpte170m', primaries: 'smpte170m', transfer: 'smpte170m', fullRange: false } });
   }
 
+  // ?steady=1: 自動撮影の試験。書類に向けて構え（はじめの 0.6 秒で 6% 動いて止まる）、そのあとは手ぶれ程度に揺れる映像で、
+  // 撮影画面と同じ手順（AutoShot）で検出を続け、シャッターが切れるまでの時間を測る。
+  // 撮れたあとは 2 秒構えたまま（同じページを二重に撮らないか）、1.2 秒手で書類を隠して同じ位置に次のページを置いたことにし、
+  // 次のページが撮れるまでの時間も測る。
+  // 1 回の検出にかかる時間は、スマホの目安として、追いかけ 36ms・画面全体 110ms とみなす（パソコンの混み具合で結果が変わらないように）。
+  // ?shake=2 で手ぶれを 2 倍にする
+  async function steadyRun(list) {
+    const shake = params.has('shake') ? Number(params.get('shake')) : 1;
+    const SETTLE = 600, LIMIT = 5000;
+    // ?cfg={"wait":400} で、自動撮影の決まりごと（AutoShot.config）を変えて試す
+    if (params.get('cfg')) Object.assign(AutoShot.config, JSON.parse(params.get('cfg')));
+    const rows = [];
+    const cv = document.createElement('canvas');
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    const errOf = (qn, gt) => {
+      if (!qn) return Infinity;
+      const a = Geo.orderQuad(qn), b = Geo.orderQuad(gt);
+      const k = cv.width / Math.max(cv.width, cv.height), l = cv.height / Math.max(cv.width, cv.height);
+      return Math.max(...a.map((p, i) => Math.hypot((p[0] - b[i][0]) * k, (p[1] - b[i][1]) * l)));
+    };
+    for (let i = 0; i < list.length; i++) {
+      const cfg = list[i];
+      status.textContent = `${i + 1} / ${list.length}`;
+      const scene = await renderScene(cfg, cfg.seed);
+      const { W, H } = scene;
+      if (!scene.gt.every(([x, y]) => x > 2 && y > 2 && x < W - 2 && y < H - 2)) { scene.bmp.close(); continue; }
+      const r = mulberry32(cfg.seed + 300);
+      const L = Math.max(W, H);
+      // 手の動き: ゆっくりした揺れ（0.3〜0.8 Hz）と細かな震え（8〜12 Hz）
+      const wave = (amp, f0, f1) => { const f = f0 + r() * (f1 - f0), ph = r() * Math.PI * 2; return (t) => amp * Math.sin((2 * Math.PI * f * t) / 1000 + ph); };
+      const both = (a, b) => (t) => a(t) + b(t);
+      const dx = both(wave(0.004 * L * shake, 0.3, 0.8), wave(0.0012 * L * shake, 8, 12));
+      const dy = both(wave(0.004 * L * shake, 0.3, 0.8), wave(0.0012 * L * shake, 8, 12));
+      const da = both(wave(0.0026 * shake, 0.3, 0.8), wave(0.0007 * shake, 8, 12)); // 0.15° と 0.04°
+      const ds = wave(0.002 * shake, 0.2, 0.6);
+      const ang0 = r() * Math.PI * 2;
+      const pose = (t) => {
+        const k = t < SETTLE ? (1 - t / SETTLE) ** 2 : 0; // 構える間の動き（だんだん遅くなって止まる）
+        return { x: dx(t) + Math.cos(ang0) * 0.06 * L * k, y: dy(t) + Math.sin(ang0) * 0.06 * L * k, a: da(t), s: 1 + ds(t) };
+      };
+      const nz = mulberry32(cfg.seed + 301);
+      // ページを入れ替える手（腕ごと画面の外から書類の中ほどまで伸びて、戻る）
+      const mid = [scene.gt.reduce((a, p) => a + p[0], 0) / 4, scene.gt.reduce((a, p) => a + p[1], 0) / 4];
+      const docR = Geo.dist(scene.gt[0], scene.gt[2]) / 2;
+      const handDir = r() * Math.PI * 2;
+      let occFrom = Infinity, occTo = -Infinity;
+      const hand = (t) => {
+        if (t < occFrom || t > occTo) return null;
+        const k = Math.sin((Math.PI * (t - occFrom)) / (occTo - occFrom));
+        const far = docR * 2.2 * (1 - k) + docR * 0.1;
+        return [mid[0] + Math.cos(handDir) * far, mid[1] + Math.sin(handDir) * far];
+      };
+      const frameAt = (t, lg) => {
+        const sc = lg / L, w = Math.round(W * sc), h = Math.round(H * sc);
+        if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+        cx.imageSmoothingQuality = 'high';
+        // ずらして空いた画面のふちは、ずらす前の画像で埋める
+        cx.setTransform(1, 0, 0, 1, 0, 0);
+        cx.drawImage(scene.bmp, 0, 0, w, h);
+        const p = pose(t);
+        const c = Math.cos(p.a) * p.s, s = Math.sin(p.a) * p.s;
+        // 画面の中心のまわりに回して拡大し、ずらす（元の画像の座標 → 縮めたコマの座標）
+        const m = [c * sc, s * sc, -s * sc, c * sc, (W / 2 + p.x - (c * W) / 2 + (s * H) / 2) * sc, (H / 2 + p.y - (s * W) / 2 - (c * H) / 2) * sc];
+        cx.setTransform(...m);
+        cx.drawImage(scene.bmp, 0, 0);
+        const hp = hand(t);
+        if (hp) {
+          cx.lineCap = 'round';
+          cx.strokeStyle = 'rgb(214, 160, 128)';
+          cx.lineWidth = docR * 0.9;
+          cx.beginPath();
+          cx.moveTo(mid[0] + Math.cos(handDir) * docR * 6, mid[1] + Math.sin(handDir) * docR * 6);
+          cx.lineTo(hp[0], hp[1]);
+          cx.stroke();
+        }
+        const id = cx.getImageData(0, 0, w, h), d = id.data;
+        // 撮影ごとの明るさの揺れと、ざらつき
+        const gain = 1 + (nz() - 0.5) * 0.03;
+        for (let j = 0; j < d.length; j += 4) {
+          const e = (nz() + nz() - 1) * 4;
+          d[j] = d[j] * gain + e; d[j + 1] = d[j + 1] * gain + e; d[j + 2] = d[j + 2] * gain + e;
+        }
+        const gt = scene.gt.map(([x, y]) => [(m[0] * x + m[2] * y + m[4]) / w, (m[1] * x + m[3] * y + m[5]) / h]);
+        return { px: { data: d, w, h }, gt };
+      };
+      // 止まったときの書類が画面のふちすれすれ（1.5% 以内）なら、はみ出しとして撮らないのが正しいので別に数える
+      const rest = frameAt(SETTLE, 320).gt;
+      const tight = rest.some(([x, y]) => x < 0.015 || y < 0.015 || x > 0.985 || y > 0.985);
+      const st = AutoShot.create();
+      let now = 0, fire = null, resets = 0, wasStable = false, seen = null, stable = null, n = 0;
+      let dup = 0, occFire = 0, next = null;
+      const trace = [];
+      while (fire ? now < occTo + 3000 : now < SETTLE + LIMIT) {
+        const { track, slow } = AutoShot.plan(st);
+        const lg = track ? 320 : 384;
+        const fr = frameAt(now, lg);
+        const found = Detect.find(fr.px, { long: lg, prior: st.quad, quick: true, track, ...(track && st.dark ? { invert: true } : {}) });
+        n++;
+        // 確かめるだけの検出で受け入れられなかったときは、続けて画面全体を探すので、その分もかかる
+        const spent = track ? (found && found.tracked ? 36 : 146) : 110;
+        now += spent;
+        const res = AutoShot.update(st, found, now, {});
+        // ?only= で場面を絞ったときは、1 回ごとの様子を残す
+        if (only) trace.push({ t: Math.round(now - SETTLE), track, score: found ? +found.score.toFixed(2) : 0, err: found ? +(errOf(found.quad, fr.gt) * 100).toFixed(1) : null, still: st.stableSince ? Math.round(st.stableSince - SETTLE) : null, clipped: st.clipped, jump: !!st.jump, p: +res.progress.toFixed(2) });
+        if (st.quad && seen === null) seen = now;
+        if (st.stableSince && stable === null) stable = now;
+        if (wasStable && !st.stableSince && !res.fire) resets++;
+        wasStable = !!st.stableSince;
+        if (res.fire && fire) {
+          // 2 枚目: 構えたままなら二重撮り、手で隠している間なら手を撮った、そのあとなら次のページ
+          if (now < occFrom) dup++;
+          else if (now <= occTo) occFire++;
+          else { next = Math.round(now - occTo); break; }
+        } else if (res.fire) {
+          // シャッターを切ったときの手の動きの速さ（長辺に対する割合 / 秒。速いと写真がぶれる）
+          const a = pose(now - 10), b = pose(now + 10);
+          fire = { t: now, err: errOf(st.quad, fr.gt), speed: Math.hypot(b.x - a.x, b.y - a.y) / L / 0.02 };
+          occFrom = now + 2000;
+          occTo = occFrom + 1200;
+        }
+        now += Math.max(80 * slow - spent, spent * 0.5, 10);
+      }
+      rows.push({
+        name: cfg.name, bg: cfg.bg, kind: cfg.kind, tight, n, resets,
+        seen: seen === null ? null : Math.round(seen - SETTLE), stable: stable === null ? null : Math.round(stable - SETTLE),
+        fired: fire ? Math.round(fire.t - SETTLE) : null, err: fire ? fire.err : null, speed: fire ? fire.speed : null, dup, occFire, next, trace,
+      });
+      scene.bmp.close();
+    }
+    const ok = rows.filter((row) => !row.tight);
+    const within = (ms) => ok.filter((row) => row.fired !== null && row.fired <= ms).length;
+    const times = ok.filter((row) => row.fired !== null).map((row) => row.fired).sort((a, b) => a - b);
+    const summary = {
+      scenes: ok.length, tight: rows.length - ok.length,
+      within1000: within(1000), within1500: within(1500), within2000: within(2000), within3000: within(3000),
+      never: ok.filter((row) => row.fired === null).length,
+      median: times.length ? times[times.length >> 1] : null,
+      early: ok.filter((row) => row.fired !== null && row.fired < 0).length,
+      wrong: ok.filter((row) => row.err !== null && row.err > 0.03).length,
+      tightFired: rows.filter((row) => row.tight && row.fired !== null).length,
+      dup: ok.filter((row) => row.dup).length, occFire: ok.filter((row) => row.occFire).length,
+      next1000: ok.filter((row) => row.next !== null && row.next <= 1000).length, next2000: ok.filter((row) => row.next !== null && row.next <= 2000).length,
+      noNext: ok.filter((row) => row.fired !== null && row.next === null).length,
+      speed: (() => { const v = ok.filter((row) => row.speed !== null).map((row) => row.speed).sort((a, b) => a - b); return v.length ? { median: v[v.length >> 1], max: v[v.length - 1] } : null; })(),
+    };
+    status.textContent = JSON.stringify(summary);
+    window.__bench = { steady: summary, rows };
+  }
+
   const params = new URLSearchParams(location.search);
   const long = Number(params.get('long')) || 480;
   const quick = params.get('quick') === '1';
@@ -397,6 +546,7 @@
     .filter((c) => !only || only.split(',').includes(c.name));
   const status = document.getElementById('status');
   const grid = document.getElementById('grid');
+  if (params.get('steady')) { await steadyRun(list); return; }
   const rows = [];
   for (let i = 0; i < list.length; i++) {
     const cfg = list[i];

@@ -51,8 +51,6 @@
   const REFINE_LONG = 1600; // 写真から探すときは、最後にこの解像度で辺を合わせ直す
   // 撮影中の検出の解像度。ふだんは 384、1 回の検出に時間がかかる端末では 320 に下げる（ワーカーで動くので画面は止まらない）
   const LIVE_LONG = 384, LIVE_LONG_SLOW = 320;
-  // 撮影中に枠を出す点数の下限。正しく見つけたときはほぼ 0.45 を超え、周りの書類などを誤って囲んだときは下回りやすい
-  const SHOW_SCORE = 0.45;
   const LIVE_GAP = 80; // 撮影中の検出は 1 秒に約 12 回まで。端末が熱で遅くならないようにする（枠は描画側でなめらかに動かす）
   const PREVIEW_SIZE = { w: 1920, h: 1440 }; // 撮影画面の映像の大きさ
   const LARGE_SIZE = { w: 4096, h: 3072 }; // 写真として撮れない端末で、撮る瞬間だけ頼む映像の大きさ
@@ -384,9 +382,10 @@
     const video = $('cam-video');
     const track = stream.getVideoTracks()[0];
     state.camera = {
+      ...AutoShot.create(), // 見つけた枠と、自動撮影の判断に使う状態
       stream, track, replaceId,
-      quad: null, display: null, score: 0, lastSeen: 0, raf: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
-      stableSince: 0, autoLock: null, caps: {}, drawn: '', instants: [],
+      display: null, raf: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
+      caps: {}, drawn: '', instants: [],
     };
     video.srcObject = stream;
     video.play().catch(() => {});
@@ -426,7 +425,7 @@
       // 端末を回して縦横が入れ替わったら、前の向きで見つけた枠は捨てて探し直す
       const landscape = video.videoWidth > video.videoHeight;
       if (cam.landscape !== undefined && cam.landscape !== landscape) {
-        cam.quad = null; cam.display = null; cam.jump = null; cam.stableSince = 0;
+        AutoShot.reset(cam); cam.display = null;
       }
       cam.landscape = landscape;
     };
@@ -461,8 +460,6 @@
     if (cam.busy) cam.closedWhileBusy = true;
     else if (cam.added) toast(`${cam.added}ページを追加しました`);
   }
-
-  const quadMove = (a, b) => Math.max(...a.map((p, i) => Math.abs(p[0] - b[i][0]) + Math.abs(p[1] - b[i][1])));
 
   let shutterP = -1;
   function setShutterProgress(p) {
@@ -510,10 +507,7 @@
       // 撮影中（写真の処理でカメラが止まっている間）は調べない
       if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
       const started = performance.now();
-      // 書類を見つけ続けている間は、4 回に 3 回は直前の位置を確かめるだけにして軽くする（4 回に 1 回は画面全体を探す。
-      // 枠が止まっている間は 8 回に 1 回）。別の場所の候補が出ているときは、それを確かめるため画面全体を探す
-      cam.frames = (cam.frames || 0) + 1;
-      const track = !!cam.quad && !cam.jump && cam.frames % (cam.stableSince ? 8 : 4) !== 0;
+      const { track, slow } = AutoShot.plan(cam, state.settings.autoCapture);
       // 確かめるだけなら、小さいコマでもずれはほとんど変わらない（長辺 384 → 320 で、ずれの中央値 0.062% → 0.074%）
       const long = cam.slow || track ? LIVE_LONG_SLOW : LIVE_LONG;
       const frame = await liveFrame(video, direct, long);
@@ -533,67 +527,24 @@
       }
       if (state.camera !== cam) return;
       onDetected(cam, found);
-      // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする。
-      // 枠が止まっている間は間隔を倍にする（構えて待つ間の電池と発熱を抑える）
+      // 遅い端末では、かかった時間の半分は休ませて、ワーカーが CPU を使い切らないようにする
       const spent = performance.now() - started;
       // かかった時間をならして見て、遅い端末では解像度を下げる（速くなれば戻す）
       cam.spent = cam.spent ? cam.spent * 0.8 + spent * 0.2 : spent;
       if (!cam.slow && cam.spent > 140) cam.slow = true;
       else if (cam.slow && cam.spent < 70) cam.slow = false;
-      // 撮った写真を取り込んでいる間も倍にする（取り込みのワーカーと CPU を取り合って、映像がカクつかないように）
-      const gap = LIVE_GAP * (cam.stableSince ? 2 : 1) * (state.pending > 0 ? 2 : 1);
+      // 撮り終えて構えたままの間（slow）と、撮った写真を取り込んでいる間は、間隔を倍にする
+      // （電池と発熱を抑える。取り込みのワーカーと CPU を取り合って、映像がカクつかないように）
+      const gap = LIVE_GAP * slow * (state.pending > 0 ? 2 : 1);
       await sleep(useWorker ? Math.max(gap - spent, spent * 0.5, 10) : Math.max(120, spent * 2));
     }
   }
 
+  // 検出の結果で枠を動かし、自動撮影がオンなら、枠が止まってから少し待ってシャッターを切る
   function onDetected(cam, found) {
-    const now = performance.now();
-    if (found && found.score >= SHOW_SCORE && cam.quad && quadMove(cam.quad, found.quad) >= 0.08 && now - cam.lastSeen < 900) {
-      // 別の場所へ大きく飛んだときは、続けて同じあたりに見つかるまで前の枠を残す（枠が行き来してちらつかないように）
-      const same = cam.jump && quadMove(cam.jump, found.quad) < 0.05;
-      cam.jump = found.quad;
-      if (!same) { found = null; cam.stableSince = 0; }
-    } else {
-      cam.jump = null;
-    }
-    if (found && found.score >= SHOW_SCORE) {
-      const q = found.quad;
-      cam.dark = !!found.dark;
-      const prev = cam.quad;
-      const moved = prev ? quadMove(prev, q) : 1;
-      // 枠の描画でもなめらかにするので、ここでは軽くならすだけにする
-      cam.quad = prev && moved < 0.08 ? prev.map((p, i) => [p[0] * 0.4 + q[i][0] * 0.6, p[1] * 0.4 + q[i][1] * 0.6]) : q;
-      cam.score = found.score;
-      cam.lastSeen = now;
-      if (moved < 0.015 && found.score >= 0.6) {
-        if (!cam.stableSince) cam.stableSince = now;
-      } else {
-        cam.stableSince = 0;
-      }
-      // 撮ったあとは、書類を動かすか入れ替えるまで次の自動撮影をしない
-      if (cam.autoLock && quadMove(cam.autoLock, cam.quad) > 0.1) cam.autoLock = null;
-    } else if (now - cam.lastSeen > 900) {
-      cam.quad = null;
-      cam.stableSince = 0;
-      cam.autoLock = null;
-    }
-    // 書類のふちが画面の外に出ているときは知らせ、自動では撮らない（切れたまま撮らないように）
-    cam.clipped = !!cam.quad && cam.quad.some(([x, y]) => x < 0.012 || y < 0.012 || x > 0.988 || y > 0.988);
-    cam.small = !!cam.quad && Geo.area(cam.quad) < 0.1;
-
-    const AUTO_WAIT = 1100;
-    if (state.settings.autoCapture && cam.quad && cam.stableSince && !cam.autoLock && !cam.busy && !cam.clipped) {
-      const p = (now - cam.stableSince) / AUTO_WAIT;
-      setShutterProgress(p);
-      if (p >= 1) {
-        cam.autoLock = cam.quad.map((pt) => pt.slice());
-        cam.stableSince = 0;
-        setShutterProgress(0);
-        capture();
-      }
-    } else {
-      setShutterProgress(0);
-    }
+    const { progress, fire } = AutoShot.update(cam, found, performance.now(), { auto: state.settings.autoCapture, busy: cam.busy });
+    setShutterProgress(progress);
+    if (fire) capture();
   }
 
   // 枠は画面の書き換えごとに、検出した位置へなめらかに近づけて描く（検出の回数より滑らかに見える）

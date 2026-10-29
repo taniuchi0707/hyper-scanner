@@ -107,6 +107,20 @@ try {
   const pct = (x) => `${(x * 100).toFixed(1)}%`;
   for (const r of results) {
     if (r.error) { console.log(`${r.query}: ${r.error}`); continue; }
+    if (r.steady) {
+      // ?steady=1: 構えて止めてから自動でシャッターが切れるまで
+      const s = r.steady;
+      console.log(`[${r.query}] 場面 ${s.scenes} / 1 秒以内 ${s.within1000} / 1.5 秒以内 ${s.within1500} / 2 秒以内 ${s.within2000} / 3 秒以内 ${s.within3000} / 5 秒で撮れない ${s.never} / 中央値 ${s.median}ms`
+        + ` / 止まる前に撮った ${s.early} / ずれたまま撮った(3%超) ${s.wrong}` + (s.speed ? ` / 撮ったときの動き 中央値 ${(s.speed.median * 100).toFixed(2)}%/秒 最大 ${(s.speed.max * 100).toFixed(2)}%/秒` : '') + `  （ふちすれすれ ${s.tight} 場面のうち撮った ${s.tightFired}）  ${r.secs}s`);
+      console.log(`  撮ったあと: 構えたままで二重に撮った ${s.dup} / 手で隠している間に撮った ${s.occFire} / 置き換えた次のページを 1 秒以内に撮った ${s.next1000}・2 秒以内 ${s.next2000}・3 秒で撮れない ${s.noNext}`);
+      if (showRows) {
+        for (const row of r.rows.filter((x) => !x.tight && (!(x.fired !== null && x.fired <= 1500) || x.dup || x.occFire || !(x.next !== null && x.next <= 1500)))) {
+          for (const f of row.trace || []) console.log('    ' + JSON.stringify(f));
+          console.log(`  ${row.name}(${row.bg}/${row.kind}) 二重 ${row.dup} 手 ${row.occFire} 次 ${row.next}ms 撮影 ${row.fired}ms 見つけた ${row.seen}ms 止まった ${row.stable}ms 止まりの取り消し ${row.resets} 回 検出 ${row.n} 回${row.err !== null ? ` ずれ ${(row.err * 100).toFixed(1)}%` : ''}`);
+        }
+      }
+      continue;
+    }
     if (r.profile) {
       console.log(`[${r.query}] ${JSON.stringify(r.profile)}`);
       if (args.includes('--dump')) {
