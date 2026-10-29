@@ -45,6 +45,8 @@ function DetectModule(Geo, Imaging) {
   // 最小値は、符号を反転して最大値として求める
   function rankFilter(src, w, h, r, isMax) {
     const sign = isMax ? 1 : -1;
+    // 窓が小さいとき（撮影中の検出など）は、窓の中を直接比べるほうが速い
+    if (r <= 2) return smallRank(src, w, h, r, sign);
     const k = 2 * r + 1;
     const n = Math.max(w, h), m = n + 2 * r;
     const pad = new Float32Array(m), g = new Float32Array(m), hb = new Float32Array(m), res = new Float32Array(n);
@@ -103,6 +105,37 @@ function DetectModule(Geo, Imaging) {
     return out;
   }
   let vhgw = null; // 縦方向の作業用（使い回す）
+
+  function smallRank(src, w, h, r, sign) {
+    const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
+    // 横方向: 両端に -∞ を r 個ずつ足した行で、窓の中の最大を取る（r は 1 か 2）
+    const pad = new Float32Array(w + 4).fill(-Infinity);
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) pad[x + 2] = sign * src[o + x];
+      if (r === 1) {
+        for (let x = 0; x < w; x++) { const a = pad[x + 1], b = pad[x + 2], c = pad[x + 3]; const m = a > b ? a : b; tmp[o + x] = m > c ? m : c; }
+      } else {
+        for (let x = 0; x < w; x++) {
+          const a = pad[x], b = pad[x + 1], c = pad[x + 2], d = pad[x + 3], e = pad[x + 4];
+          const m = a > b ? a : b, n = c > d ? c : d, k = m > n ? m : n;
+          tmp[o + x] = k > e ? k : e;
+        }
+      }
+    }
+    // 縦方向: 画像の外の行は端の行で代える（最大は同じ行を何度見ても変わらない）
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      const a = (y > 1 ? y - r : 0) * w, b = (y > 0 ? y - 1 : 0) * w, c = (y < h - 1 ? y + 1 : h - 1) * w, d = (y < h - r ? y + r : h - 1) * w;
+      for (let x = 0; x < w; x++) {
+        const p = tmp[a + x], q = tmp[b + x], v = tmp[o + x], t = tmp[c + x], u = tmp[d + x];
+        const m = p > q ? p : q, n = t > u ? t : u, k = m > n ? m : n;
+        out[o + x] = sign * (k > v ? k : v);
+      }
+    }
+    return out;
+  }
+
 
   // 明るい紙の上の暗く細いもの（文字・罫線）を消す
   const closing = (src, w, h, r) => rankFilter(rankFilter(src, w, h, r, true), w, h, r, false);
