@@ -437,16 +437,18 @@ function DetectModule(Geo, Imaging) {
 
   // ---------- 点数づけ ----------
 
-  function makeContext({ data: px, w, h }, chroma = 0, chromaLite = false) {
+  function makeContext({ data: px, w, h }, chroma = 0, chromaLite = false, hue = false) {
     const n = w * h;
     const lum = new Float32Array(n);
     const sat = new Float32Array(n);
+    const yb = hue ? new Float32Array(n) : null;
     for (let i = 0, j = 0; i < n; i++, j += 4) {
       const r = px[j], g = px[j + 1], b = px[j + 2];
       const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
       const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
       lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
       sat[i] = mx - mn;
+      if (yb) yb[i] = (r + g) * 0.5 - b;
     }
     const r = Math.max(2, Math.round(Math.max(w, h) / 160));
     const L = blur2(closing(lum, w, h, r), w, h);
@@ -470,6 +472,15 @@ function DetectModule(Geo, Imaging) {
       for (let i = 0; i < n; i++) {
         const m = chroma * cg.mag[i];
         if (m > mag[i]) { mag[i] = m; gx[i] = chroma * cg.gx[i]; gy[i] = chroma * cg.gy[i]; }
+      }
+    }
+    if (yb) {
+      // 色合い（青み ↔ 黄み）の境目。紺の書類と茶色の木目のように、明るさも彩度も近いが色合いが違う境目を拾う
+      const Y = boxBlur(yb, w, h, 1);
+      const cg = sobel(Y, w, h);
+      for (let i = 0; i < n; i++) {
+        const m = cg.mag[i];
+        if (m > mag[i]) { mag[i] = m; gx[i] = cg.gx[i]; gy[i] = cg.gy[i]; }
       }
     }
     const gscale = Math.max(40, percentile(mag, 0.99));
@@ -1097,7 +1108,8 @@ function DetectModule(Geo, Imaging) {
     }
     if (invert) px = invertPixels(px);
     // 色の境目も使う（撮影中は軽さを優先して、彩度の閉じ処理を省く）
-    const ctx = makeContext(px, 1, quick);
+    // 地の色が濃い書類かもしれないとき（2 通りで探している間）は、色合いの境目も使う
+    const ctx = makeContext(px, 1, quick, invert !== undefined);
     mark('prepare');
     const { w, h, gx, gy, mag, gscale } = ctx;
     const priorPx = prior ? Geo.orderQuad(prior.map(([x, y]) => [x * w, y * h])) : null;
@@ -1202,8 +1214,16 @@ function DetectModule(Geo, Imaging) {
     candidates.sort((a, b) => b.s - a.s);
 
     // 上位の候補は、辺を境目に合わせ直してから比べ直す
-    // （撮影中の quick は 10 件。合わせ直す前は点の低い、指で一部が隠れた書類も拾えるように）
-    const top = candidates.slice(0, doRefine ? (quick ? 10 : 8) : 1).map((c) => {
+    // （撮影中の quick は 6 件。合わせ直す前は点の低い、指で一部が隠れた書類も拾えるように）。
+    // ほとんど同じ四角形（直線と領域の両方から出たものなど）は、合わせ直すと同じになるので 1 つだけにする
+    const limit = doRefine ? (quick ? 6 : 8) : 1, near = 0.012 * ctx.long;
+    const picks = [];
+    for (const c of candidates) {
+      if (picks.length >= limit) break;
+      if (picks.some((p) => p.q.every((pt, i) => Math.abs(pt[0] - c.q[i][0]) < near && Math.abs(pt[1] - c.q[i][1]) < near))) continue;
+      picks.push(c);
+    }
+    const top = picks.map((c) => {
       if (!doRefine) return c;
       // 広めに探して大きなずれを直し、狭く探して細かく合わせる
       const wide = Math.max(4, Math.round(ctx.long / 60));

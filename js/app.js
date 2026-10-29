@@ -510,11 +510,12 @@
       // 撮影中（写真の処理でカメラが止まっている間）は調べない
       if (document.hidden || cam.busy || video.readyState < 2 || !video.videoWidth) { await sleep(100); continue; }
       const started = performance.now();
-      const long = cam.slow ? LIVE_LONG_SLOW : LIVE_LONG;
       // 書類を見つけ続けている間は、4 回に 3 回は直前の位置を確かめるだけにして軽くする（4 回に 1 回は画面全体を探す）。
       // 別の場所の候補が出ているときは、それを確かめるため画面全体を探す
       cam.frames = (cam.frames || 0) + 1;
       const track = !!cam.quad && !cam.jump && cam.frames % 4 !== 0;
+      // 確かめるだけなら、小さいコマでもずれはほとんど変わらない（長辺 384 → 320 で、ずれの中央値 0.062% → 0.074%）
+      const long = cam.slow || track ? LIVE_LONG_SLOW : LIVE_LONG;
       const frame = await liveFrame(video, direct, long);
       let found = null;
       if (frame) {
