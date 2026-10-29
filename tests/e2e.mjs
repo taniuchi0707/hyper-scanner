@@ -152,6 +152,40 @@ try {
     return { kb: Math.round(blob.size / 1024), pages: (t.match(/\\/Type \\/Page\\b/g) || []).length, ok: t.startsWith('%PDF') && t.trimEnd().endsWith('%%EOF') };
   `);
   check('PDF を書き出せる', !!(pdf && pdf.ok && pdf.pages >= 5), pdf ? `${pdf.pages} ページ・${pdf.kb}KB` : '書き出せない');
+  // 編集画面: 自動検出、仕上げの切り替え、撮り直し（撮影画面で 1 枚撮ると、そのページが置き換わって編集画面に戻る）
+  const edit = await page.run(`
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('#pages .card-btn').click();
+    await wait(1200);
+    const opened = !document.getElementById('editor').hidden;
+    document.getElementById('ed-auto').click();
+    await wait(1500);
+    const info = document.getElementById('ed-info').textContent;
+    const finishTab = [...document.querySelectorAll('.seg button, [role=tab]')].find((b) => /仕上げ/.test(b.textContent));
+    if (finishTab) finishTab.click();
+    await wait(1200);
+    document.querySelector('#ed-filters [data-filter="bw"]').click();
+    await wait(1500);
+    const bw = document.querySelector('#ed-filters [data-filter="bw"]').getAttribute('aria-checked');
+    const cropTab = [...document.querySelectorAll('.seg button, [role=tab]')].find((b) => /範囲|切り抜き|四隅/.test(b.textContent));
+    if (cropTab) cropTab.click();
+    await wait(500);
+    document.getElementById('file-retake').click();
+    await wait(2500);
+    const camOpen = !document.getElementById('camera').hidden;
+    for (let i = 0; i < 50 && document.getElementById('cam-shutter').disabled; i++) await wait(100);
+    document.getElementById('cam-shutter').click();
+    for (let i = 0; i < 80 && (!document.getElementById('camera').hidden || document.getElementById('editor').hidden); i++) await wait(100);
+    await wait(1500);
+    const back = !document.getElementById('editor').hidden && document.getElementById('camera').hidden;
+    document.getElementById('ed-done').click();
+    await wait(800);
+    return { opened, info, bw, camOpen, back, cards: document.querySelectorAll('#pages .card-btn').length };
+  `);
+  check('編集画面が開き、自動検出できる', edit.opened && /px/.test(edit.info), edit.info);
+  check('仕上げを白黒に切り替えられる', edit.bw === 'true');
+  check('撮り直しで撮影画面が開き、撮ると編集画面に戻る', edit.camOpen && edit.back, `一覧 ${edit.cards} 枚`);
+
   // 映像のコマが少ない端末（1 秒に 10 コマ）では、見るための映像を 1280×960 に下げる
   await page.send('Page.navigate', { url: `${BASE}?e2e=slow${Date.now()}` });
   await sleep(2000);
