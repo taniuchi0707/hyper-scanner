@@ -186,6 +186,24 @@ try {
   check('仕上げを白黒に切り替えられる', edit.bw === 'true');
   check('撮り直しで撮影画面が開き、撮ると編集画面に戻る', edit.camOpen && edit.back, `一覧 ${edit.cards} 枚`);
 
+  // 撮影の途中で撮影画面を閉じても、その 1 枚は取り込まれる
+  const midClose = await page.run(`
+    document.getElementById('file-camera').click();
+    await new Promise((r) => setTimeout(r, 1500));
+    const before = document.querySelectorAll('#pages .card-btn').length;
+    const el = document.getElementById('toast-text');
+    let toast = '';
+    const obs = new MutationObserver(() => { toast = el.textContent; });
+    obs.observe(el, { childList: true, characterData: true, subtree: true });
+    document.getElementById('cam-shutter').click();
+    await new Promise((r) => setTimeout(r, 50));
+    document.getElementById('cam-close').click();
+    for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 100)); if (toast && !document.querySelector('#pages .pending')) break; }
+    obs.disconnect();
+    return { added: document.querySelectorAll('#pages .card-btn').length - before, toast };
+  `);
+  check('撮影の途中で閉じても、その 1 枚を取り込む', midClose.added === 1 && /1ページ/.test(midClose.toast), `${midClose.added} 枚・${midClose.toast}`);
+
   // 写真として撮れる端末（ImageCapture.takePhoto）。横倒しの 4096×3072 の写真が返っても、画面の向きにそろえて取り込む
   await page.send('Page.navigate', { url: `${BASE}?e2e=photo${Date.now()}` });
   await sleep(2000);
