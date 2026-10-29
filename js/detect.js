@@ -429,9 +429,10 @@ function DetectModule(Geo, Imaging) {
     const T = { map: boxBlur(boxBlur(m2.map, m2.w, m2.h, tr), m2.w, m2.h, tr), w: m2.w, h: m2.h };
     const tThr = 0.1 * Math.max(40, percentile(mag, 0.99));
     if (chroma) {
-      // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。文字は彩度が低いので閉じ処理で消える。
+      // 色の境目も境目に加える（明るさは同じでも色が違う紙の重なりや、淡い色の机）。細い文字は彩度が低いので、
+      // 小さな閉じ処理で消す（大きく閉じると、木目のような模様の机の彩度が近くの最大値まで上がり、濃い書類との差が消える）。
       // chromaLite のときは閉じ処理を省いて軽くする（撮影中）
-      const C = chromaLite ? satB : blur2(closing(sat, w, h, r), w, h);
+      const C = chromaLite ? satB : boxBlur(closing(sat, w, h, 1), w, h, 1);
       const cg = sobel(C, w, h);
       for (let i = 0; i < n; i++) {
         const m = chroma * cg.mag[i];
@@ -1044,7 +1045,14 @@ function DetectModule(Geo, Imaging) {
     if (invert === undefined && !exp.nodark && darkDocument(px)) {
       const a = find(source, { ...opts, invert: false });
       const b = find(source, { ...opts, invert: true });
-      const r = !a ? b : !b ? a : b.score > a.score ? b : a;
+      // 濃い書類の中の明るい部分（表や写真の枠）は、反転しない画像でくっきりした四角形になり、点が高く出やすい。
+      // 反転した画像でそれを囲む四角形が見つかれば、点が少し低くても書類全体としてそちらを選ぶ
+      const within = (inner, outer) => inner.every(([x, y]) => outer.every(([x0, y0], i) => {
+        const [x1, y1] = outer[(i + 1) % 4];
+        return (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) >= -0.01 * Math.hypot(x1 - x0, y1 - y0);
+      }));
+      const wraps = a && b && b.score >= 0.3 && b.score >= a.score * 0.6 && Geo.area(b.quad) > Geo.area(a.quad) * 1.15 && within(a.quad, b.quad);
+      const r = !a ? b : !b ? a : wraps || b.score > a.score ? b : a;
       if (r && r === b) r.dark = true; // 地の色が濃い書類（仕上げを「カラー」から始めるときの目印）
       return r;
     }
