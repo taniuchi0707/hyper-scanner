@@ -111,6 +111,21 @@ try {
   `);
   check('手動で続けて撮れる', /（4）/.test(manual), manual);
 
+  // 撮った直後は「完了」の枠に撮った瞬間の映像、取り込みのあとは仕上がりのサムネイルが出る
+  const thumb = await page.run(`
+    const el = document.getElementById('cam-thumb');
+    for (let i = 0; i < 50 && document.getElementById('cam-shutter').disabled; i++) await new Promise((r) => setTimeout(r, 100));
+    document.getElementById('cam-shutter').click();
+    let first = '';
+    for (let i = 0; i < 30; i++) { await new Promise((r) => setTimeout(r, 50)); if (/data:/.test(el.style.backgroundImage)) { first = 'data'; break; } }
+    let later = '';
+    for (let i = 0; i < 50 && !/（5）/.test(document.getElementById('cam-count').textContent); i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 100)); if (/blob:/.test(el.style.backgroundImage)) { later = 'blob'; break; } }
+    return { first, later };
+  `);
+  check('撮った直後に、撮った瞬間の映像を出す', thumb.first === 'data');
+  check('取り込みのあとは、仕上がりのサムネイルに替わる', thumb.later === 'blob');
+
   // 閉じて一覧を確かめる
   const list = await page.run(`
     document.getElementById('cam-close').click();
@@ -118,7 +133,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
     return { cards: document.querySelectorAll('#pages .card-btn').length, toast: document.getElementById('toast-text').textContent };
   `);
-  check('撮ったページが一覧に並ぶ', list.cards >= 4, `${list.cards} 枚・${list.toast}`);
+  check('撮ったページが一覧に並ぶ', list.cards >= 5, `${list.cards} 枚・${list.toast}`);
 
   // PDF の書き出し
   const pdf = await page.run(`
@@ -136,7 +151,7 @@ try {
     const t = await blob.text();
     return { kb: Math.round(blob.size / 1024), pages: (t.match(/\\/Type \\/Page\\b/g) || []).length, ok: t.startsWith('%PDF') && t.trimEnd().endsWith('%%EOF') };
   `);
-  check('PDF を書き出せる', !!(pdf && pdf.ok && pdf.pages >= 4), pdf ? `${pdf.pages} ページ・${pdf.kb}KB` : '書き出せない');
+  check('PDF を書き出せる', !!(pdf && pdf.ok && pdf.pages >= 5), pdf ? `${pdf.pages} ページ・${pdf.kb}KB` : '書き出せない');
   // 映像のコマが少ない端末（1 秒に 10 コマ）では、見るための映像を 1280×960 に下げる
   await page.send('Page.navigate', { url: `${BASE}?e2e=slow${Date.now()}` });
   await sleep(2000);

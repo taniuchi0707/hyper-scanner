@@ -162,7 +162,7 @@
 
   function renderPages() {
     // 撮影画面を開いている間は、裏に隠れた一覧を作り直さない（閉じたときにまとめて作る）
-    if (state.camera) { state.pagesDirty = true; return; }
+    if (state.camera) { state.pagesDirty = true; updateCamThumb(); return; }
     state.pagesDirty = false;
     const frag = document.createDocumentFragment();
     state.pages.forEach((p, i) => {
@@ -386,7 +386,7 @@
     state.camera = {
       stream, track, replaceId,
       quad: null, display: null, score: 0, lastSeen: 0, raf: 0, busy: false, torch: false, added: 0, imageCapture: null, hint: '',
-      stableSince: 0, autoLock: null, caps: {}, drawn: '',
+      stableSince: 0, autoLock: null, caps: {}, drawn: '', instants: [],
     };
     video.srcObject = stream;
     video.play().catch(() => {});
@@ -687,6 +687,7 @@
     // 縮小・向きの補正・四隅の検出などの重い処理は、ワーカーにまとめて任せる
     const hint = cam.quad ? { quad: cam.quad.map((p) => p.slice()), ratio: video.videoWidth / video.videoHeight } : null;
     const frame = await grabFrame(video, Infinity);
+    const instant = captureThumb(frame);
     let source = frame, ref = null;
     let photo = null;
     if (cam.imageCapture && !cam.torch && !cam.photoFailed) {
@@ -722,8 +723,25 @@
       return;
     }
     cam.added++;
-    enqueue(() => addImage(source, { hint, ref }));
+    // 取り込みが終わるまでは、撮った瞬間の映像を「完了」の枠に出しておく
+    if (instant) cam.instants.push(instant);
+    enqueue(() => addImage(source, { hint, ref }).finally(() => { cam.instants = cam.instants.filter((u) => u !== instant); }));
     updateCamThumb();
+  }
+
+  // 撮った瞬間の映像を小さな画像にする（撮れたことがすぐわかるように）
+  function captureThumb(frame) {
+    if (!frame) return null;
+    try {
+      const k = 120 / Math.max(frame.width, frame.height);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(frame.width * k));
+      c.height = Math.max(1, Math.round(frame.height * k));
+      c.getContext('2d').drawImage(frame, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', 0.7);
+    } catch (e) {
+      return null;
+    }
   }
 
   // 映像が実際に何コマ届いているかを、開いてから少しの間数える。1 秒に 15 コマを大きく下回る（端末が 1920×1440 の
@@ -807,7 +825,8 @@
     const cam = state.camera;
     if (!cam) return;
     const last = state.pages[state.pages.length - 1];
-    $('cam-thumb').style.backgroundImage = cam.added && last && last.thumbUrl ? `url("${last.thumbUrl}")` : 'none';
+    const url = cam.instants.length ? cam.instants[cam.instants.length - 1] : cam.added && last && last.thumbUrl;
+    $('cam-thumb').style.backgroundImage = url ? `url("${url}")` : 'none';
     $('cam-count').textContent = cam.added ? `完了（${cam.added}）` : '完了';
   }
 
