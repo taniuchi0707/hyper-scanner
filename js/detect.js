@@ -692,6 +692,12 @@ function DetectModule(Geo, Imaging) {
       s *= 1 - 0.45 * Math.min(1, Math.max(0, (inside.margin - 0.08) / 0.25));
       const corner = cornerFactor(sides, cornerMix);
       s *= corner;
+      // 両隣の辺がどちらもこの辺の先まで続いている（両端が T 字）なら、書類の中の区切り（写真や表の上の線）とみなして点を下げる。
+      // 書類の一部が画面の外に出たとき、見えている部分の区切りを書類の下の辺と取り違えて、途中までで撮らないように
+      for (let i = 0; i < 4; i++) {
+        const pa = sides[(i + 3) % 4], nb = sides[(i + 1) % 4];
+        if (!sides[i].border && !pa.border && !nb.border && pa.extB >= 0.6 && nb.extA >= 0.6) { s *= 0.7; break; }
+      }
       s *= aspectFactor(q, w, h, aspect);
       s *= priorFactor(q, prior, ctx.long, priorGain);
       s *= centerFactor(cx, cy, w, h, center);
