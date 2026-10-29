@@ -330,7 +330,7 @@ function DetectModule(Geo, Imaging) {
   }
 
   // map が明るい（below なら thr より小さい）塊を四角形にする。thr を省くと大津の方法で決める
-  function regionQuads(map, w, h, thr = null, below = false) {
+  function regionQuads(map, w, h, thr = null, below = false, unions = false) {
     const t = thr === null ? otsuOf(map) : thr;
     let mask = new Uint8Array(w * h);
     for (let i = 0; i < mask.length; i++) mask[i] = (below ? map[i] < t : map[i] > t) ? 1 : 0;
@@ -384,16 +384,21 @@ function DetectModule(Geo, Imaging) {
       }
     }
     const quads = [];
-    for (let i = 0; i < picked.length; i++) {
+    const hullQuad = (list) => {
       const pts = [];
-      for (let y = 0; y < h; y++) {
-        if (minX[i][y] >= 0) pts.push([minX[i][y] + 0.5, y + 0.5], [maxX[i][y] + 0.5, y + 0.5]);
+      for (const i of list) {
+        for (let y = 0; y < h; y++) {
+          if (minX[i][y] >= 0) pts.push([minX[i][y] + 0.5, y + 0.5], [maxX[i][y] + 0.5, y + 0.5]);
+        }
       }
       const hull = Geo.convexHull(pts);
-      if (hull.length < 4) continue;
+      if (hull.length < 4) return;
       const q = Geo.hullToQuad(hull);
       if (q) quads.push(Geo.orderQuad(q));
-    }
+    };
+    for (let i = 0; i < picked.length; i++) hullQuad([i]);
+    // 書類の中の写真などで塊が切れたときのために、大きい塊どうしをまとめた四角形も出す
+    if (unions && picked.length >= 2) { hullQuad([0, 1]); if (picked.length >= 3) hullQuad([0, 1, 2]); }
     return quads;
   }
 
@@ -1095,10 +1100,10 @@ function DetectModule(Geo, Imaging) {
     // b) 領域から作る四角形。明るい紙の塊と、模様の少ない塊（布の柄や木目の上に置いた紙）。
     // 模様の塊のふちはぼかしの分ずれるので、帯の差で辺を合わせ直す
     const regional = [];
-    const regionsOf = (half, thr, below) => regionQuads(half.map, half.w, half.h, thr, below)
+    const regionsOf = (half, thr, below, unions = false) => regionQuads(half.map, half.w, half.h, thr, below, unions)
       .map((q) => q.map(([x, y]) => [(x * w) / half.w, (y * h) / half.h]));
     for (const q of regionsOf(halve(ctx.P, w, h))) regional.push([q, 'region']);
-    for (const q of regionsOf(ctx.T, ctx.tThr, true)) {
+    for (const q of regionsOf(ctx.T, ctx.tThr, true, true)) {
       regional.push([q, 'texture']);
       regional.push([Geo.orderQuad(regionRefine(q, ctx)), 'texture+']);
     }
