@@ -486,13 +486,17 @@ function ImagingModule(Geo) {
       return g;
     };
     const base = thumb(ref, fw, fh, 0);
-    let best = 0, bestErr = Infinity;
-    for (const rot of [0, 90, 180, 270]) {
+    const errOf = (rot) => {
       const t = thumb(small, k < 1 ? sw0 : w, k < 1 ? sh0 : h, rot);
       let err = 0;
       for (let i = 0; i < t.length; i++) err += Math.abs(t[i] - base[i]);
-      if (err < bestErr) { bestErr = err; best = rot; }
-    }
+      return err;
+    };
+    // 写真と映像の縦横（横長か縦長か）が同じなら 0° か 180°。0° を基本にして、180° ははっきり似ているときだけ選ぶ
+    // （白紙に近い書類のような上下対称に近い場面で、間違って逆さにしないように）。違えば 90° か 270°
+    let best;
+    if ((w >= h) === (fw >= fh)) best = errOf(180) < errOf(0) * 0.8 ? 180 : 0;
+    else best = errOf(90) <= errOf(270) ? 90 : 270;
     if (!best) return img;
     const swap = best % 180 !== 0;
     const out = makeCanvas(swap ? h : w, swap ? w : h);
