@@ -441,6 +441,7 @@
     updateBars();
     updateCamThumb();
     Engine.warm('live');
+    watchPreviewRate(cam, video);
     camLoop(cam);
     animateOverlay();
   }
@@ -723,6 +724,24 @@
     cam.added++;
     enqueue(() => addImage(source, { hint, ref }));
     updateCamThumb();
+  }
+
+  // 映像が実際に何コマ届いているかを、開いてから少しの間数える。1 秒に 15 コマを大きく下回る（端末が 1920×1440 の
+  // 映像を運びきれない）ときは、見るための映像を 1280×960 に下げてなめらかにする（写真は別に撮るので画質は変わらない）
+  function watchPreviewRate(cam, video) {
+    if (typeof video.requestVideoFrameCallback !== 'function') return;
+    let frames = 0, start = 0;
+    const tick = (now) => {
+      if (state.camera !== cam) return;
+      if (!start) start = now + 1000; // 立ち上がりの 1 秒は数えない
+      if (now >= start) frames++;
+      if (now - start < 2500) { video.requestVideoFrameCallback(tick); return; }
+      const fps = (frames * 1000) / (now - start);
+      if (fps < 15 && Math.max(video.videoWidth, video.videoHeight) > 1300 && !cam.busy) {
+        cam.track.applyConstraints({ ...cam.track.getConstraints(), width: { ideal: 1280 }, height: { ideal: 960 } }).catch(() => {});
+      }
+    };
+    video.requestVideoFrameCallback(tick);
   }
 
   // 写真として撮れない端末（iPhone など）やライトを点けているときは、撮る瞬間だけ映像を大きくして1コマを撮る。

@@ -7,7 +7,7 @@
   const MAX_W = 4096, MAX_H = 3072;
 
   const workerSource = `
-let size = null, buf = null, writer = null, t = 0;
+let size = null, buf = null, writer = null, t = 0, every = 33;
 function build(W, H) {
   const c = new OffscreenCanvas(W, H);
   const x = c.getContext('2d');
@@ -29,14 +29,16 @@ function build(W, H) {
 }
 onmessage = (e) => {
   if (e.data.writable) writer = e.data.writable.getWriter();
+  if (e.data.fps) { every = Math.round(1000 / e.data.fps); clearInterval(timer); timer = setInterval(send, every); }
   if (e.data.size) { buf = build(e.data.size[0], e.data.size[1]); size = e.data.size; postMessage({ ready: size }); }
 };
-setInterval(() => {
+function send() {
   if (!writer || !buf) return;
   const f = new VideoFrame(buf, { format: 'NV12', codedWidth: size[0], codedHeight: size[1], timestamp: (t++) * 33333,
     colorSpace: { matrix: 'smpte170m', primaries: 'smpte170m', transfer: 'smpte170m', fullRange: false } });
   writer.write(f).catch(() => {});
-}, 33);
+}
+let timer = setInterval(send, every);
 `;
 
   function pick(c, k, d) {
@@ -45,8 +47,10 @@ setInterval(() => {
     return (v && (v.exact || v.ideal || v.max)) || d;
   }
 
+  let rate = 30; // 1 秒に送るコマ数（install({ fps }) で変えられる）
   async function fakeCamera(video) {
     const worker = new Worker(URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' })));
+    worker.postMessage({ fps: rate });
     const gen = new MediaStreamTrackGenerator({ kind: 'video' });
     worker.postMessage({ writable: gen.writable }, [gen.writable]);
     let constraints = video;
@@ -64,7 +68,8 @@ setInterval(() => {
     return new MediaStream([gen]);
   }
 
-  async function install() {
+  async function install({ fps = 30 } = {}) {
+    rate = fps;
     navigator.mediaDevices.getUserMedia = async (c) => fakeCamera((c && c.video) || {});
   }
 

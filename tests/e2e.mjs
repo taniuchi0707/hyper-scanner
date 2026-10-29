@@ -137,6 +137,19 @@ try {
     return { kb: Math.round(blob.size / 1024), pages: (t.match(/\\/Type \\/Page\\b/g) || []).length, ok: t.startsWith('%PDF') && t.trimEnd().endsWith('%%EOF') };
   `);
   check('PDF を書き出せる', !!(pdf && pdf.ok && pdf.pages >= 4), pdf ? `${pdf.pages} ページ・${pdf.kb}KB` : '書き出せない');
+  // 映像のコマが少ない端末（1 秒に 10 コマ）では、見るための映像を 1280×960 に下げる
+  await page.send('Page.navigate', { url: `${BASE}?e2e=slow${Date.now()}` });
+  await sleep(2000);
+  const slow = await page.run(`
+    await new Promise((r, j) => { const s = document.createElement('script'); s.src = '/tests/camera-load.js?' + Date.now(); s.onload = r; s.onerror = j; document.head.appendChild(s); });
+    await __cameraLoad.install({ fps: 10 });
+    document.getElementById('file-camera').click();
+    await new Promise((r) => setTimeout(r, 6000));
+    const res = document.getElementById('cam-res').textContent;
+    document.getElementById('cam-close').click();
+    return res;
+  `);
+  check('映像のコマが少ない端末では映像を小さくする', /1280×960/.test(slow), slow);
   check('ページで例外が起きない', page.errors.length === 0, page.errors.slice(0, 3).join(' / '));
   page.close();
 } catch (e) {
