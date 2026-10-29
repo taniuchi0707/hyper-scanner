@@ -186,6 +186,44 @@ try {
   check('仕上げを白黒に切り替えられる', edit.bw === 'true');
   check('撮り直しで撮影画面が開き、撮ると編集画面に戻る', edit.camOpen && edit.back, `一覧 ${edit.cards} 枚`);
 
+  // 写真として撮れる端末（ImageCapture.takePhoto）。横倒しの 4096×3072 の写真が返っても、画面の向きにそろえて取り込む
+  await page.send('Page.navigate', { url: `${BASE}?e2e=photo${Date.now()}` });
+  await sleep(2000);
+  const photo = await page.run(`
+    await new Promise((r, j) => { const s = document.createElement('script'); s.src = new URL('tests/camera-load.js?' + Date.now(), location.href).href; s.onload = r; s.onerror = j; document.head.appendChild(s); });
+    await __cameraLoad.install();
+    const calls = [];
+    window.ImageCapture = class {
+      constructor(track) { this.track = track; }
+      async getPhotoCapabilities() { return { imageWidth: { min: 640, max: 4096 }, imageHeight: { min: 480, max: 3072 }, fillLightMode: ['auto', 'off', 'flash'] }; }
+      async takePhoto(settings) {
+        calls.push(JSON.stringify(settings));
+        const v = document.getElementById('cam-video');
+        const bmp = await createImageBitmap(v);
+        // 映像を 4096×3072 に広げてから 90° 回した写真（横倒しで返る端末のまね）
+        const c = new OffscreenCanvas(3072, 4096);
+        const x = c.getContext('2d');
+        x.translate(3072, 0); x.rotate(Math.PI / 2);
+        x.drawImage(bmp, 0, 0, 4096, 3072);
+        return c.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+      }
+    };
+    const before = document.querySelectorAll('#pages .card-btn').length;
+    document.getElementById('file-camera').click();
+    await new Promise((r) => setTimeout(r, 2500));
+    const res = document.getElementById('cam-res').textContent;
+    document.getElementById('cam-shutter').click();
+    for (let i = 0; i < 50 && !/（1）/.test(document.getElementById('cam-count').textContent); i++) await new Promise((r) => setTimeout(r, 100));
+    document.getElementById('cam-close').click();
+    for (let i = 0; i < 80 && document.querySelector('#pages .pending'); i++) await new Promise((r) => setTimeout(r, 250));
+    const pages = await Store.getPages();
+    const last = pages.sort((p, q) => (q.createdAt || 0) - (p.createdAt || 0))[0];
+    return { res, calls, w: last && last.width, h: last && last.height, detected: last && last.detected, added: document.querySelectorAll('#pages .card-btn').length - before };
+  `);
+  check('写真として撮る端末では写真の大きさを表示する', /写真 4096×3072/.test(photo.res), photo.res);
+  check('写真はフラッシュなしで頼む', photo.calls.some((c) => /"fillLightMode":"off"/.test(c)), photo.calls[0] || '呼ばれていない');
+  check('横倒しの写真を画面の向きにそろえて取り込む', photo.w > photo.h && photo.detected, `${photo.w}×${photo.h}・四隅 ${photo.detected ? 'あり' : 'なし'}`);
+
   // 映像のコマが少ない端末（1 秒に 10 コマ）では、見るための映像を 1280×960 に下げる
   await page.send('Page.navigate', { url: `${BASE}?e2e=slow${Date.now()}` });
   await sleep(2000);
