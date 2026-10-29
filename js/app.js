@@ -457,7 +457,9 @@
     $('app').classList.remove('under-camera');
     if (state.pagesDirty) renderPages();
     updateBars();
-    if (cam.added) toast(`${cam.added}ページを追加しました`);
+    // 撮影の途中で閉じたときは、その 1 枚を加えてから知らせる（capture の最後で）
+    if (cam.busy) cam.closedWhileBusy = true;
+    else if (cam.added) toast(`${cam.added}ページを追加しました`);
   }
 
   const quadMove = (a, b) => Math.max(...a.map((p, i) => Math.abs(p[0] - b[i][0]) + Math.abs(p[1] - b[i][1])));
@@ -732,6 +734,7 @@
       return;
     }
     cam.added++;
+    if (cam.closedWhileBusy) toast(`${cam.added}ページを追加しました`);
     // 取り込みが終わるまでは、撮った瞬間の映像を「完了」の枠に出しておく
     if (instant) cam.instants.push(instant);
     enqueue(() => addImage(source, { hint, ref }).finally(() => { cam.instants = cam.instants.filter((u) => u !== instant); }));
@@ -778,20 +781,25 @@
     const caps = cam.caps || {};
     const cur = Math.max(video.videoWidth, video.videoHeight);
     const most = Math.max((caps.width && caps.width.max) || 0, (caps.height && caps.height.max) || 0);
-    if (most < cur * 1.25 || typeof track.applyConstraints !== 'function') return null;
+    // 撮影画面を閉じたあと（カメラが止まっている）は、すでに取った映像の1コマを使う
+    if (state.camera !== cam || most < cur * 1.25 || typeof track.applyConstraints !== 'function') return null;
     // 元の頼み方に戻すため。取れない端末では、撮影画面の映像の大きさを頼み直す（空のまま戻すと 640×480 になる）
     let base = track.getConstraints ? track.getConstraints() : {};
     if (!base || !base.width) base = { ...(base || {}), width: { ideal: PREVIEW_SIZE.w }, height: { ideal: PREVIEW_SIZE.h } };
     try {
-      await track.applyConstraints({ ...base, width: { ideal: LARGE_SIZE.w }, height: { ideal: LARGE_SIZE.h } });
+      // 端末によっては返事がないことがあるので、待つ時間に上限を設ける
+      await withTimeout(track.applyConstraints({ ...base, width: { ideal: LARGE_SIZE.w }, height: { ideal: LARGE_SIZE.h } }), 2500);
       if (!(await videoGrows(video, cur, 2500))) return null;
       await sleep(300); // 明るさとピントが落ち着くのを待つ
+      if (state.camera !== cam) return null;
       cam.largeSize = { w: video.videoWidth, h: video.videoHeight };
       return await grabFrame(video, Infinity);
     } catch (e) {
       return null;
     } finally {
-      try { await track.applyConstraints(base); } catch (e) { /* 大きいまま続ける */ }
+      if (state.camera === cam) {
+        try { await withTimeout(track.applyConstraints(base), 2500); } catch (e) { /* 大きいまま続ける */ }
+      }
       if (cam.torch) track.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
       updateCamRes();
     }
