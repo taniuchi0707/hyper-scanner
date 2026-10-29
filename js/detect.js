@@ -1061,8 +1061,8 @@ function DetectModule(Geo, Imaging) {
     if (!cn || !on) return false;
     // 小さいほうから数えて k 番目（0 始まり）の値
     const at = (hist, k) => { let acc = 0; for (let b = 0; b < 1024; b++) { acc += hist[b]; if (acc > k) return b / 4; } return 255; };
-    // 中ほどの暗いほうから 30% の値で比べる（真ん中の値だと、書類の中ほどを大きな写真が占めるときに写真の明るさになる）
-    const c = at(center, Math.floor(cn * 0.3));
+    // 中ほどの暗いほうから 20% の値で比べる（真ん中の値だと、書類の中ほどを大きな写真が占めるときに写真の明るさになる）
+    const c = at(center, Math.floor(cn * 0.2));
     return c < at(outer, on >> 1) - 50 || (c < 90 && c < at(all, Math.floor(an * 0.99)) - 60);
   }
 
